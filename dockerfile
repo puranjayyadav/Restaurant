@@ -25,4 +25,4 @@ RUN python manage.py migrate
 EXPOSE 8000
 
 # Start Gunicorn server
-CMD ["gunicorn", "my_new_project.wsgi:application", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "my_new_app.wsgi:application", "--bind", "0.0.0.0:${PORT:-8000}"]

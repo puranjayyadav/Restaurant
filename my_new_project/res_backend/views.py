@@ -5,6 +5,11 @@ from rest_framework import status
 from firebase_admin import auth
 import firebase_admin
 from firebase_admin import credentials, firestore
+from rest_framework import viewsets, filters
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import Establishment, EstablishmentFeature
+from .serializers import EstablishmentSerializer, EstablishmentFeatureSerializer
 
 # Path to your service account key JSON file
 SERVICE_ACCOUNT_PATH = '../creds/restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json'
@@ -84,3 +89,35 @@ def get_trips(request):
         return Response({"trips": trips}, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class EstablishmentViewSet(viewsets.ModelViewSet):
+    serializer_class = EstablishmentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['price_range', 'dining_style', 'location_region']
+    search_fields = ['name', 'address']
+    ordering_fields = ['name', 'created_at', 'updated_at']
+
+    def get_queryset(self):
+        queryset = Establishment.objects.filter(user=self.request.user)
+        
+        # Filter by features
+        features = self.request.query_params.getlist('features', [])
+        if features:
+            queryset = queryset.filter(features__feature_type__in=features).distinct()
+        
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def get_available_filters(self):
+        """Return available filter options for the frontend"""
+        return {
+            'price_ranges': dict(Establishment.PRICE_RANGES),
+            'dining_styles': dict(Establishment.DINING_STYLES),
+            'features': dict(EstablishmentFeature.FEATURE_TYPES),
+            'locations': list(Establishment.objects.filter(
+                user=self.request.user
+            ).values_list('location_region', flat=True).distinct())
+        }

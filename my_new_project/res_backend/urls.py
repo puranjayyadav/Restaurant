@@ -1,5 +1,5 @@
-from django.urls import path
-from .views import verify_token, get_trips, EstablishmentViewSet
+from django.urls import path, include
+from .views import verify_token, get_trips, EstablishmentViewSet, get_trip_recommendations, get_similar_restaurants, record_user_interaction, create_session, get_personalized_recommendations
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -14,5 +14,11 @@ urlpatterns = [
     path('get-trips/', get_trips, name='get_trips'),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    #path('create_session/', create_session,name='create_session')
-] + router.urls
+    path('create_session/', create_session, name='create_session'),
+    path('', include(router.urls)),
+    # Recommendation system endpoints
+    path('trip/<int:trip_id>/recommendations/', get_trip_recommendations, name='trip-recommendations'),
+    path('establishment/<int:establishment_id>/similar/', get_similar_restaurants, name='similar-restaurants'),
+    path('interaction/', record_user_interaction, name='record-interaction'),
+    path('recommendations/', get_personalized_recommendations, name='personalized-recommendations'),
+]

@@ -18,6 +18,6 @@ class EstablishmentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'address', 'price_range', 'price_range_display',
             'dining_style', 'dining_style_display', 'location_region',
-            'features', 'created_at', 'updated_at'
+            'latitude', 'longitude', 'features', 'created_at', 'updated_at'
         ]
         read_only_fields = ['user'] 

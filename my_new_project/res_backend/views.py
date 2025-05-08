@@ -1,5 +1,5 @@
 # views.py
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
 from rest_framework import status
 from firebase_admin import auth
@@ -10,6 +10,9 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import Establishment, EstablishmentFeature
 from .serializers import EstablishmentSerializer, EstablishmentFeatureSerializer
+from django.shortcuts import get_object_or_404
+from .recommendation import RestaurantRecommender
+import uuid
 
 # Path to your service account key JSON file
 SERVICE_ACCOUNT_PATH = '../creds/restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json'
@@ -23,7 +26,12 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 @api_view(['POST'])
+@authentication_classes([])  # Disable DRF's token authentication for this endpoint
 def verify_token(request):
+    """
+    Verify a Firebase ID token and return the associated user ID.
+    This endpoint handles authentication from the Flutter app.
+    """
     # 1. Parse the 'Authorization' header
     auth_header = request.headers.get('Authorization')
     if not auth_header:
@@ -38,22 +46,27 @@ def verify_token(request):
     id_token = parts[1]
 
     try:
-        # 2. Verify the token
+        # 2. Verify the Firebase token directly
         decoded_token = auth.verify_id_token(id_token)
         uid = decoded_token.get('uid', None)
         if not uid:
             return Response({"error": "No UID in token"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        return Response({"message": "Token is valid", "uid": uid}, 
-                        status=status.HTTP_200_OK)
+        # Successfully verified token, return user info
+        return Response({
+            "message": "Token is valid", 
+            "uid": uid,
+            "email": decoded_token.get('email', ''),
+            "name": decoded_token.get('name', '')
+        }, status=status.HTTP_200_OK)
     except auth.ExpiredIdTokenError:
         return Response({"error": "Token is expired"}, 
                         status=status.HTTP_401_UNAUTHORIZED)
     except auth.InvalidIdTokenError:
-        return Response({"error": "Invalid token"}, 
+        return Response({"error": "Invalid Firebase token"}, 
                         status=status.HTTP_401_UNAUTHORIZED)
     except Exception as e:
-        return Response({"error": str(e)}, 
+        return Response({"error": f"Token verification failed: {str(e)}"}, 
                         status=status.HTTP_401_UNAUTHORIZED)
     
 
@@ -121,3 +134,267 @@ class EstablishmentViewSet(viewsets.ModelViewSet):
                 user=self.request.user
             ).values_list('location_region', flat=True).distinct())
         }
+
+@api_view(['GET'])
+@permission_classes([])
+
+def get_trip_recommendations(request, trip_id):
+    """Get personalized restaurant recommendations for a trip.
+    
+    This endpoint uses the ML-based recommendation engine to suggest
+    restaurants based on user preferences and trip location.
+    """
+    try:
+        # Get Firebase token from authorization header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return Response({"error": "Missing Authorization header"}, 
+                            status=status.HTTP_401_UNAUTHORIZED)
+
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != 'bearer':
+            return Response({"error": "Invalid Authorization header format"}, 
+                            status=status.HTTP_401_UNAUTHORIZED)
+
+        id_token = parts[1]
+        
+        # Verify token and get user ID
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            uid = decoded_token.get('uid')
+        except Exception as e:
+            return Response({"error": f"Invalid token: {str(e)}"}, 
+                            status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Get trip from Firebase
+        db = firestore.client()
+        trip_doc = db.collection('trips').document(trip_id).get()
+        
+        if not trip_doc.exists:
+            return Response(
+                {"error": "Trip not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+            
+        trip_data = trip_doc.to_dict()
+        
+        # Check if this trip belongs to the authenticated user
+        if trip_data.get('uid') != uid:
+            return Response(
+                {"error": "You don't have permission to access this trip"}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get trip location (end address as an example)
+        trip_location = trip_data.get('endAddress', '')
+        
+        if not trip_location:
+            return Response(
+                {"error": "Trip has no location information"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Convert Firebase user ID to Django user ID
+        # This assumes your Django user IDs match Firebase UIDs or you have a mapping
+        user_id = request.user.id
+        
+        # Initialize and use recommender
+        recommender = RestaurantRecommender()
+        
+        # Get recommendations
+        recommendations = recommender.recommend_for_trip(user_id, trip_location)
+        
+        serializer = EstablishmentSerializer(recommendations, many=True)
+        return Response(serializer.data)
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to get recommendations: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_similar_restaurants(request, establishment_id):
+    """Get restaurants similar to the specified establishment.
+    
+    This endpoint uses content-based filtering to find restaurants
+    with similar characteristics to the one specified.
+    """
+    try:
+        # Check if the establishment exists and user has access
+        establishment = get_object_or_404(Establishment, id=establishment_id)
+        
+        # Initialize recommender
+        recommender = RestaurantRecommender()
+        
+        # Get recommendations (similar restaurants)
+        similar_restaurants = recommender.recommend_similar_restaurants(establishment_id)
+        
+        serializer = EstablishmentSerializer(similar_restaurants, many=True)
+        return Response(serializer.data)
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to get similar restaurants: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def record_user_interaction(request):
+    """Record user interaction with a restaurant to improve recommendations.
+    
+    This endpoint allows tracking various user interactions like viewing,
+    saving, or rating restaurants to build a better recommendation model.
+    """
+    try:
+        # Get required data from request
+        establishment_id = request.data.get('establishment_id')
+        interaction_type = request.data.get('interaction_type')
+        rating = request.data.get('rating', None)
+        trip_id = request.data.get('trip_id', None)
+        
+        # Validate input
+        if not establishment_id or not interaction_type:
+            return Response(
+                {"error": "Missing required fields"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Validate interaction type
+        valid_types = ['VIEW', 'SAVE', 'VISIT', 'RATE']
+        if interaction_type not in valid_types:
+            return Response(
+                {"error": f"Invalid interaction type. Must be one of: {', '.join(valid_types)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get establishment
+        establishment = get_object_or_404(Establishment, id=establishment_id)
+        
+        # Create UserInteraction instance
+        from .models import UserInteraction
+        
+        interaction = UserInteraction(
+            user=request.user,
+            establishment=establishment,
+            interaction_type=interaction_type,
+            rating=rating if interaction_type == 'RATE' else None,
+            trip_id=trip_id  # Use trip_id directly instead of the trip object
+        )
+        
+        # Save the interaction
+        interaction.save()
+        
+        return Response({
+            "success": True, 
+            "message": "Interaction recorded",
+            "interaction_id": interaction.id
+        })
+    except ValueError as ve:
+        return Response(
+            {"error": str(ve)}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to record interaction: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@authentication_classes([])  # Disable DRF's authentication for this endpoint
+def create_session(request):
+    """Create a new session for a user.
+    
+    Receives a userId from the request and returns a unique sessionId
+    that can be used to track the user's session.
+    """
+    user_id = request.data.get('userId')
+    if not user_id:
+        return Response({"error": "Missing userId"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Generate a unique session ID
+    session_id = str(uuid.uuid4())
+    
+    # You could store this session in your database if needed
+    # For now, just return the generated ID
+    
+    return Response({"sessionId": session_id}, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([])  # Temporarily disable authentication requirement
+def get_personalized_recommendations(request):
+    """Get personalized restaurant recommendations based on user's activity history.
+    
+    This endpoint analyzes user interactions and preferences to provide
+    tailored restaurant recommendations for the discovery radar.
+    """
+    try:
+        # Get token from authorization header
+        auth_header = request.headers.get('Authorization')
+        user_id = None
+        
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == 'bearer':
+                id_token = parts[1]
+                try:
+                    decoded_token = auth.verify_id_token(id_token)
+                    user_id = decoded_token.get('uid')
+                except Exception as e:
+                    print(f"Token verification error: {e}")
+                    # Continue with default user
+        
+        # Use a default user_id if not authenticated
+        if not user_id:
+            user_id = 1  # Use a default test user ID
+        
+        # Initialize recommender
+        recommender = RestaurantRecommender()
+        
+        # Get location from query params if available
+        lat = request.query_params.get('lat')
+        lon = request.query_params.get('lon')
+        location_filter = request.query_params.get('location', '')
+        
+        # If a location is provided, filter by it
+        if location_filter:
+            recommendations = recommender.recommend_for_trip(user_id, location_filter)
+        # If lat/lon coordinates are provided
+        elif lat and lon:
+            # Use the new specialized method for coordinates-based recommendations
+            recommendations = recommender.recommend_by_coordinates(
+                user_id, 
+                lat, 
+                lon, 
+                radius_km=5,  # Default 5km radius
+                n=5  # Return top 5 recommendations
+            )
+        else:
+            # No location filter provided, get general recommendations
+            all_establishments = Establishment.objects.all()
+            
+            if not all_establishments:
+                recommendations = []
+            else:        
+                # Get user preferences vector
+                user_vector = recommender.get_user_vector(user_id)
+                
+                # Calculate recommendations
+                establishment_scores = []
+                for est in all_establishments:
+                    est_vector = recommender.get_establishment_vector(est)
+                    similarity = recommender.cosine_similarity(user_vector, est_vector)
+                    establishment_scores.append((est, similarity))
+                    
+                # Sort by similarity and get top 5
+                establishment_scores.sort(key=lambda x: x[1], reverse=True)
+                recommendations = [est for est, score in establishment_scores[:5]]
+        
+        serializer = EstablishmentSerializer(recommendations, many=True)
+        return Response(serializer.data)
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to get recommendations: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

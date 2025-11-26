@@ -1,5 +1,5 @@
 from django.urls import path, include
-from .views import verify_token, get_trips, EstablishmentViewSet, get_trip_recommendations, get_similar_restaurants, record_user_interaction, create_session, get_personalized_recommendations
+from .views import verify_token, get_trips, EstablishmentViewSet, get_trip_recommendations, get_similar_restaurants, record_user_interaction, create_session, get_personalized_recommendations, generate_day_itinerary
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -21,4 +21,5 @@ urlpatterns = [
     path('establishment/<int:establishment_id>/similar/', get_similar_restaurants, name='similar-restaurants'),
     path('interaction/', record_user_interaction, name='record-interaction'),
     path('recommendations/', get_personalized_recommendations, name='personalized-recommendations'),
+    path('generate-day-itinerary/', generate_day_itinerary, name='generate-day-itinerary'),
 ]

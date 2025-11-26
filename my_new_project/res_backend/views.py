@@ -397,3 +397,193 @@ def get_personalized_recommendations(request):
             {"error": f"Failed to get recommendations: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@api_view(['POST'])
+@permission_classes([])
+def generate_day_itinerary(request):
+    """
+    Generate a day itinerary from morning to evening based on user location and selected categories.
+    Ensures all places are within max_distance_km of each other (default 1.5km).
+    """
+    import math
+    import json
+    
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        
+        user_id = data.get('user_id')
+        latitude = float(data.get('latitude'))
+        longitude = float(data.get('longitude'))
+        selected_categories = data.get('selected_categories', [])
+        max_distance_km = float(data.get('max_distance_km', 1.5))
+        places_data = data.get('places', [])  # Places fetched from Google API by Flutter
+        
+        if not places_data:
+            return Response(
+                {"error": "No places provided"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Define time slots
+        time_slots = [
+            {
+                'name': 'morning',
+                'start_time': '09:00',
+                'end_time': '11:00',
+                'allowed_types': ['cafe', 'bakery', 'breakfast'],
+                'max_places': 2
+            },
+            {
+                'name': 'mid_day',
+                'start_time': '11:00',
+                'end_time': '14:00',
+                'allowed_types': ['restaurant', 'food', 'meal_takeaway'],
+                'max_places': 2
+            },
+            {
+                'name': 'afternoon',
+                'start_time': '14:00',
+                'end_time': '17:00',
+                'allowed_types': ['museum', 'art_gallery', 'library', 'park', 'cafe'],
+                'max_places': 2
+            },
+            {
+                'name': 'evening',
+                'start_time': '17:00',
+                'end_time': '20:00',
+                'allowed_types': ['restaurant', 'bar', 'night_club', 'lounge'],
+                'max_places': 2
+            }
+        ]
+        
+        # Category to Google Places type mapping
+        category_to_types = {
+            'restaurants': ['restaurant', 'food', 'meal_takeaway'],
+            'cafes': ['cafe', 'bakery'],
+            'museums': ['museum', 'art_gallery'],
+            'parks': ['park'],
+            'shopping': ['shopping_mall', 'store'],
+            'bars': ['bar', 'night_club', 'lounge'],
+            'dessert': ['bakery', 'cafe']
+        }
+        
+        # Filter places by selected categories
+        filtered_places = []
+        if selected_categories:
+            allowed_types_set = set()
+            for category in selected_categories:
+                if category.lower() in category_to_types:
+                    allowed_types_set.update(category_to_types[category.lower()])
+            
+            for place in places_data:
+                place_types = [t.lower() for t in place.get('types', [])]
+                if any(t in allowed_types_set for t in place_types):
+                    filtered_places.append(place)
+        else:
+            filtered_places = places_data
+        
+        # Haversine distance calculation
+        def calculate_distance(lat1, lon1, lat2, lon2):
+            R = 6371  # Earth radius in km
+            lat1_rad = math.radians(lat1)
+            lat2_rad = math.radians(lat2)
+            delta_lat = math.radians(lat2 - lat1)
+            delta_lon = math.radians(lon2 - lon1)
+            
+            a = (math.sin(delta_lat / 2) ** 2 +
+                 math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+            c = 2 * math.asin(math.sqrt(a))
+            return R * c
+        
+        # Get place coordinates
+        def get_place_coords(place):
+            geometry = place.get('geometry', {})
+            location = geometry.get('location', {})
+            return (location.get('lat'), location.get('lng'))
+        
+        # Generate itinerary
+        itinerary = []
+        last_location = (latitude, longitude)
+        used_place_ids = set()
+        
+        for slot in time_slots:
+            slot_places = []
+            
+            # Find places matching this slot's types
+            for place in filtered_places:
+                place_id = place.get('place_id') or place.get('id')
+                if place_id in used_place_ids:
+                    continue
+                
+                place_types = [t.lower() for t in place.get('types', [])]
+                if any(t in slot['allowed_types'] for t in place_types):
+                    coords = get_place_coords(place)
+                    if coords[0] and coords[1]:
+                        distance = calculate_distance(
+                            last_location[0], last_location[1],
+                            coords[0], coords[1]
+                        )
+                        if distance <= max_distance_km:
+                            slot_places.append({
+                                'place': place,
+                                'distance': distance,
+                                'coords': coords
+                            })
+            
+            # Add variety: shuffle places within distance tiers for randomization
+            # Tier 1: Very close (0-500m) - highest priority
+            # Tier 2: Walkable (500m-1km) - medium priority  
+            # Tier 3: Further (1km-1.5km) - lower priority
+            import random
+            
+            tier1 = [p for p in slot_places if p['distance'] <= 0.5]
+            tier2 = [p for p in slot_places if 0.5 < p['distance'] <= 1.0]
+            tier3 = [p for p in slot_places if 1.0 < p['distance'] <= max_distance_km]
+            
+            # Shuffle within each tier for variety
+            random.shuffle(tier1)
+            random.shuffle(tier2)
+            random.shuffle(tier3)
+            
+            # Combine tiers with preference for closer places
+            sorted_places = tier1 + tier2 + tier3
+            selected = sorted_places[:slot['max_places']]
+            
+            for item in selected:
+                place = item['place']
+                place_id = place.get('place_id') or place.get('id')
+                used_place_ids.add(place_id)
+                
+                distance_km = item['distance']
+                walk_time_minutes = int((distance_km / 5.0) * 60)  # 5 km/h walking speed
+                
+                itinerary_item = {
+                    'slot_name': slot['name'],
+                    'start_time': slot['start_time'],
+                    'place_name': place.get('name', 'Unknown'),
+                    'place_id': place_id,
+                    'latitude': item['coords'][0],
+                    'longitude': item['coords'][1],
+                    'address': place.get('vicinity', place.get('formatted_address', 'Address not available')),
+                    'distance_from_previous': round(distance_km, 2),
+                    'estimated_walk_time': walk_time_minutes,
+                    'types': place.get('types', []),
+                    'photos': place.get('photos', [])  # Include photos
+                }
+                itinerary.append(itinerary_item)
+                last_location = item['coords']
+        
+        return Response({
+            'itinerary': itinerary,
+            'total_items': len(itinerary),
+            'neighborhood': 'Local Area'  # Could be extracted from address
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error generating itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to generate itinerary: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

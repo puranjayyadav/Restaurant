@@ -322,7 +322,7 @@ def create_session(request):
     return Response({"sessionId": session_id}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([])  # Temporarily disable authentication requirement
+@permission_classes([])  # Disable authentication requirement completely
 def get_personalized_recommendations(request):
     """Get personalized restaurant recommendations based on user's activity history.
     
@@ -330,24 +330,12 @@ def get_personalized_recommendations(request):
     tailored restaurant recommendations for the discovery radar.
     """
     try:
-        # Get token from authorization header
-        auth_header = request.headers.get('Authorization')
-        user_id = None
+        # Skip authentication for debugging
+        # Use a fixed user ID for testing
+        user_id = 1  
         
-        if auth_header:
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == 'bearer':
-                id_token = parts[1]
-                try:
-                    decoded_token = auth.verify_id_token(id_token)
-                    user_id = decoded_token.get('uid')
-                except Exception as e:
-                    print(f"Token verification error: {e}")
-                    # Continue with default user
-        
-        # Use a default user_id if not authenticated
-        if not user_id:
-            user_id = 1  # Use a default test user ID
+        # Print debug information
+        print(f"DEBUG: Received recommendation request with params: {request.query_params}")
         
         # Initialize recommender
         recommender = RestaurantRecommender()
@@ -357,11 +345,15 @@ def get_personalized_recommendations(request):
         lon = request.query_params.get('lon')
         location_filter = request.query_params.get('location', '')
         
+        print(f"DEBUG: Location parameters - lat: {lat}, lon: {lon}, location_filter: {location_filter}")
+        
         # If a location is provided, filter by it
         if location_filter:
+            print(f"DEBUG: Using location filter: {location_filter}")
             recommendations = recommender.recommend_for_trip(user_id, location_filter)
         # If lat/lon coordinates are provided
         elif lat and lon:
+            print(f"DEBUG: Using coordinates: {lat}, {lon}")
             # Use the new specialized method for coordinates-based recommendations
             recommendations = recommender.recommend_by_coordinates(
                 user_id, 
@@ -371,12 +363,15 @@ def get_personalized_recommendations(request):
                 n=5  # Return top 5 recommendations
             )
         else:
+            print("DEBUG: No location specified, using general recommendations")
             # No location filter provided, get general recommendations
             all_establishments = Establishment.objects.all()
             
             if not all_establishments:
+                print("DEBUG: No establishments found in database")
                 recommendations = []
             else:        
+                print(f"DEBUG: Found {all_establishments.count()} establishments for recommendations")
                 # Get user preferences vector
                 user_vector = recommender.get_user_vector(user_id)
                 
@@ -391,9 +386,13 @@ def get_personalized_recommendations(request):
                 establishment_scores.sort(key=lambda x: x[1], reverse=True)
                 recommendations = [est for est, score in establishment_scores[:5]]
         
+        print(f"DEBUG: Returning {len(recommendations)} recommendations")
         serializer = EstablishmentSerializer(recommendations, many=True)
         return Response(serializer.data)
     except Exception as e:
+        import traceback
+        print(f"DEBUG: Error in recommendation API: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to get recommendations: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

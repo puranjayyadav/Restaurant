@@ -185,7 +185,7 @@ class ApiService {
   // Railway Backend URL
   static const String BASE_URL = 'https://your-app-production.railway.app';
   
-  final String googleApiKey = 'AIzaSyCqeTKWDSpdukY0rG3_0jipiGY1W5UU_28';
+  final String googleApiKey = '';
   
   // Update all API calls to use BASE_URL
   Future<Map<String, dynamic>> generateDayItinerary(...) async {

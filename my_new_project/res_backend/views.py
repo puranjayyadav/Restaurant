@@ -415,8 +415,10 @@ def generate_day_itinerary(request):
         latitude = float(data.get('latitude'))
         longitude = float(data.get('longitude'))
         selected_categories = data.get('selected_categories', [])
-        max_distance_km = float(data.get('max_distance_km', 1.5))
+        max_distance_km = float(data.get('max_distance_km', 3.0))  # Increased from 1.5 to 3.0 for rural areas
         places_data = data.get('places', [])  # Places fetched from Google API by Flutter
+        
+        print(f"DEBUG: Using max distance: {max_distance_km}km between places")
         
         if not places_data:
             return Response(
@@ -523,7 +525,9 @@ def generate_day_itinerary(request):
                             last_location[0], last_location[1],
                             coords[0], coords[1]
                         )
-                        if distance <= max_distance_km:
+                        # For first slot, allow larger radius to find initial places
+                        max_dist = max_distance_km * 2 if slot == time_slots[0] else max_distance_km
+                        if distance <= max_dist:
                             slot_places.append({
                                 'place': place,
                                 'distance': distance,

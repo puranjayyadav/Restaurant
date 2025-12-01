@@ -673,9 +673,24 @@ def submit_public_itinerary(request):
         print(f"DEBUG: Content-Type: {request.content_type}")
         print(f"DEBUG: Content-Length: {request.META.get('CONTENT_LENGTH', 'unknown')}")
         
-        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        # Parse request body - DRF's request.data already handles JSON parsing
+        if hasattr(request, 'data') and request.data:
+            data = request.data
+        else:
+            # Fallback to manual parsing
+            try:
+                body_str = request.body.decode('utf-8') if isinstance(request.body, bytes) else request.body
+                data = json.loads(body_str)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                print(f"DEBUG: Failed to parse request body: {str(e)}")
+                return Response(
+                    {"error": f"Invalid JSON in request body: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         print(f"DEBUG: Parsed data successfully")
         print(f"DEBUG: Items count: {len(data.get('items', []))}")
+        print(f"DEBUG: First item sample: {str(data.get('items', [])[:1]) if data.get('items') else 'No items'}")
         
         user_id = data.get('user_id')
         user_name = data.get('user_name', 'Anonymous')
@@ -706,18 +721,19 @@ def submit_public_itinerary(request):
             )
         
         # Create document in Firestore
+        # Ensure all data is JSON-serializable
         itinerary_data = {
-            'user_id': user_id,
-            'user_name': user_name,
-            'user_photo_url': user_photo_url,
-            'title': title,
-            'description': description,
-            'location': location,
-            'latitude': latitude,
-            'longitude': longitude,
-            'neighborhood': neighborhood,
-            'categories': categories,
-            'items': items,
+            'user_id': str(user_id),
+            'user_name': str(user_name),
+            'user_photo_url': str(user_photo_url) if user_photo_url else None,
+            'title': str(title),
+            'description': str(description),
+            'location': str(location),
+            'latitude': float(latitude),
+            'longitude': float(longitude),
+            'neighborhood': str(neighborhood),
+            'categories': list(categories) if categories else [],
+            'items': items if isinstance(items, list) else [],
             'status': 'pending',
             'likes_count': 0,
             'shares_count': 0,
@@ -726,8 +742,17 @@ def submit_public_itinerary(request):
             'updated_at': firestore.SERVER_TIMESTAMP,
         }
         
-        doc_ref = db.collection('public_itineraries').add(itinerary_data)
-        itinerary_id = doc_ref[1].id
+        print(f"DEBUG: Attempting to add document to Firestore...")
+        try:
+            # Firestore add() returns (write_result, document_reference)
+            write_result, doc_ref = db.collection('public_itineraries').add(itinerary_data)
+            itinerary_id = doc_ref.id
+            print(f"DEBUG: Successfully created document with ID: {itinerary_id}")
+        except Exception as firestore_error:
+            print(f"DEBUG: Firestore error: {str(firestore_error)}")
+            import traceback
+            print(f"DEBUG: Firestore traceback: {traceback.format_exc()}")
+            raise firestore_error
         
         # Update user stats
         user_stats_ref = db.collection('user_stats').document(user_id)
@@ -755,10 +780,15 @@ def submit_public_itinerary(request):
         
     except Exception as e:
         import traceback
+        error_trace = traceback.format_exc()
         print(f"DEBUG: Error submitting public itinerary: {str(e)}")
-        print(f"DEBUG: {traceback.format_exc()}")
+        print(f"DEBUG: {error_trace}")
+        # Return detailed error for debugging
         return Response(
-            {"error": f"Failed to submit itinerary: {str(e)}"},
+            {
+                "error": f"Failed to submit itinerary: {str(e)}",
+                "details": error_trace.split('\n')[-5:] if len(error_trace) > 0 else []
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

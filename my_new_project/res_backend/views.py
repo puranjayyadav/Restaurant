@@ -23,6 +23,10 @@ if not firebase_admin._apps:
     # Try to get credentials from environment variable first (for Railway)
     firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
     
+    print(f"DEBUG: Checking Firebase credentials...")
+    print(f"DEBUG: FIREBASE_CREDENTIALS env var exists: {firebase_creds_json is not None}")
+    print(f"DEBUG: FIREBASE_CREDENTIALS length: {len(firebase_creds_json) if firebase_creds_json else 0}")
+    
     if firebase_creds_json:
         # Parse JSON string from environment variable
         try:
@@ -32,14 +36,21 @@ if not firebase_admin._apps:
             else:
                 cred_dict = firebase_creds_json
             
+            # Validate required fields
+            required_fields = ['type', 'project_id', 'private_key', 'client_email']
+            missing_fields = [field for field in required_fields if field not in cred_dict]
+            if missing_fields:
+                raise ValueError(f"Missing required fields in credentials: {missing_fields}")
+            
             cred = credentials.Certificate(cred_dict)
             print("DEBUG: Initialized Firebase using environment variable")
             print(f"DEBUG: Firebase project_id: {cred_dict.get('project_id', 'unknown')}")
+            print(f"DEBUG: Firebase client_email: {cred_dict.get('client_email', 'unknown')}")
         except (json.JSONDecodeError, ValueError) as e:
             print(f"ERROR: Failed to parse FIREBASE_CREDENTIALS: {str(e)}")
             print(f"ERROR: FIREBASE_CREDENTIALS length: {len(firebase_creds_json) if firebase_creds_json else 0}")
-            print(f"ERROR: First 100 chars: {firebase_creds_json[:100] if firebase_creds_json else 'None'}")
-            raise
+            print(f"ERROR: First 200 chars: {firebase_creds_json[:200] if firebase_creds_json else 'None'}")
+            raise ValueError(f"Invalid FIREBASE_CREDENTIALS format: {str(e)}. Please check that the environment variable contains valid JSON.")
     else:
         # Fallback to file path (for local development)
         SERVICE_ACCOUNT_PATH = '../creds/restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json'
@@ -53,11 +64,23 @@ if not firebase_admin._apps:
                 cred = credentials.Certificate(alt_path)
                 print(f"DEBUG: Initialized Firebase using alternative path: {alt_path}")
             else:
-                raise FileNotFoundError(
-                    f"Firebase credentials not found. Set FIREBASE_CREDENTIALS environment variable or place credentials file at {SERVICE_ACCOUNT_PATH}"
+                error_msg = (
+                    "FIREBASE_CREDENTIALS environment variable is not set!\n"
+                    "Please set it on Railway:\n"
+                    "1. Go to your Railway project dashboard\n"
+                    "2. Select your Django service\n"
+                    "3. Go to Variables tab\n"
+                    "4. Add FIREBASE_CREDENTIALS with the JSON content from your service account file"
                 )
+                print(f"ERROR: {error_msg}")
+                raise FileNotFoundError(error_msg)
     
-    firebase_admin.initialize_app(cred)
+    try:
+        firebase_admin.initialize_app(cred)
+        print("DEBUG: Firebase app initialized successfully")
+    except Exception as init_error:
+        print(f"ERROR: Failed to initialize Firebase app: {str(init_error)}")
+        raise
 
 # Get a Firestore client
 db = firestore.client()

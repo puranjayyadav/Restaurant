@@ -14,12 +14,41 @@ from django.shortcuts import get_object_or_404
 from .recommendation import RestaurantRecommender
 import uuid
 
-# Path to your service account key JSON file
-SERVICE_ACCOUNT_PATH = '../creds/restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json'
-
 # Initialize Firebase app (if not already initialized)
+# Supports both environment variable (Railway) and file path (local dev)
 if not firebase_admin._apps:
-    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+    import os
+    import json
+    
+    # Try to get credentials from environment variable first (for Railway)
+    firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
+    
+    if firebase_creds_json:
+        # Parse JSON string from environment variable
+        try:
+            cred_dict = json.loads(firebase_creds_json)
+            cred = credentials.Certificate(cred_dict)
+            print("DEBUG: Initialized Firebase using environment variable")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"ERROR: Failed to parse FIREBASE_CREDENTIALS: {str(e)}")
+            raise
+    else:
+        # Fallback to file path (for local development)
+        SERVICE_ACCOUNT_PATH = '../creds/restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json'
+        if os.path.exists(SERVICE_ACCOUNT_PATH):
+            cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+            print("DEBUG: Initialized Firebase using file path")
+        else:
+            # Try alternative path
+            alt_path = os.path.join(os.path.dirname(__file__), '..', '..', 'creds', 'restaurant-47dab-firebase-adminsdk-fbsvc-a2225a7d82.json')
+            if os.path.exists(alt_path):
+                cred = credentials.Certificate(alt_path)
+                print(f"DEBUG: Initialized Firebase using alternative path: {alt_path}")
+            else:
+                raise FileNotFoundError(
+                    f"Firebase credentials not found. Set FIREBASE_CREDENTIALS environment variable or place credentials file at {SERVICE_ACCOUNT_PATH}"
+                )
+    
     firebase_admin.initialize_app(cred)
 
 # Get a Firestore client

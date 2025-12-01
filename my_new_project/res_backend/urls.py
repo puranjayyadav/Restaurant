@@ -1,5 +1,12 @@
 from django.urls import path, include
-from .views import verify_token, get_trips, EstablishmentViewSet, get_trip_recommendations, get_similar_restaurants, record_user_interaction, create_session, get_personalized_recommendations, generate_day_itinerary
+from .views import (
+    verify_token, get_trips, EstablishmentViewSet, get_trip_recommendations, 
+    get_similar_restaurants, record_user_interaction, create_session, 
+    get_personalized_recommendations, generate_day_itinerary,
+    submit_public_itinerary, get_public_itineraries, like_public_itinerary,
+    add_public_itinerary_to_schedule, share_public_itinerary, update_public_itinerary,
+    delete_public_itinerary, approve_public_itinerary, get_user_stats
+)
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -22,4 +29,14 @@ urlpatterns = [
     path('interaction/', record_user_interaction, name='record-interaction'),
     path('recommendations/', get_personalized_recommendations, name='personalized-recommendations'),
     path('generate-day-itinerary/', generate_day_itinerary, name='generate-day-itinerary'),
+    # Public Itinerary Sharing endpoints
+    path('submit-itinerary/', submit_public_itinerary, name='submit-itinerary'),
+    path('public-itineraries/', get_public_itineraries, name='public-itineraries'),
+    path('public-itineraries/<str:itinerary_id>/like/', like_public_itinerary, name='like-itinerary'),
+    path('public-itineraries/<str:itinerary_id>/add-to-schedule/', add_public_itinerary_to_schedule, name='add-to-schedule'),
+    path('public-itineraries/<str:itinerary_id>/share/', share_public_itinerary, name='share-itinerary'),
+    path('public-itineraries/<str:itinerary_id>/', update_public_itinerary, name='update-itinerary'),
+    path('public-itineraries/<str:itinerary_id>/delete/', delete_public_itinerary, name='delete-itinerary'),
+    path('admin/approve-itinerary/<str:itinerary_id>/', approve_public_itinerary, name='approve-itinerary'),
+    path('user-stats/<str:user_id>/', get_user_stats, name='user-stats'),
 ]

@@ -426,38 +426,6 @@ def generate_day_itinerary(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Define time slots
-        time_slots = [
-            {
-                'name': 'morning',
-                'start_time': '09:00',
-                'end_time': '11:00',
-                'allowed_types': ['cafe', 'bakery', 'breakfast'],
-                'max_places': 2
-            },
-            {
-                'name': 'mid_day',
-                'start_time': '11:00',
-                'end_time': '14:00',
-                'allowed_types': ['restaurant', 'food', 'meal_takeaway'],
-                'max_places': 2
-            },
-            {
-                'name': 'afternoon',
-                'start_time': '14:00',
-                'end_time': '17:00',
-                'allowed_types': ['museum', 'art_gallery', 'library', 'park', 'cafe'],
-                'max_places': 2
-            },
-            {
-                'name': 'evening',
-                'start_time': '17:00',
-                'end_time': '20:00',
-                'allowed_types': ['restaurant', 'bar', 'night_club', 'lounge'],
-                'max_places': 2
-            }
-        ]
-        
         # Category to Google Places type mapping
         category_to_types = {
             'restaurants': ['restaurant', 'food', 'meal_takeaway'],
@@ -469,14 +437,108 @@ def generate_day_itinerary(request):
             'dessert': ['bakery', 'cafe']
         }
         
-        # Filter places by selected categories
+        # Build allowed types from selected categories
+        allowed_types_set = set()
+        for category in selected_categories:
+            if category.lower() in category_to_types:
+                allowed_types_set.update(category_to_types[category.lower()])
+        
+        # Dynamically build time slots based on selected categories
+        time_slots = []
+        
+        # Morning slot - prioritize cafes, bakeries, breakfast places
+        morning_types = []
+        if any(cat.lower() in ['cafes', 'dessert'] for cat in selected_categories):
+            morning_types.extend(['cafe', 'bakery'])
+        if any(cat.lower() == 'restaurants' for cat in selected_categories):
+            morning_types.extend(['breakfast', 'restaurant'])  # Breakfast restaurants
+        if morning_types:
+            time_slots.append({
+                'name': 'morning',
+                'start_time': '09:00',
+                'end_time': '11:00',
+                'allowed_types': morning_types,
+                'max_places': 2
+            })
+        
+        # Mid-day slot - prioritize restaurants
+        midday_types = []
+        if any(cat.lower() == 'restaurants' for cat in selected_categories):
+            midday_types.extend(['restaurant', 'food', 'meal_takeaway'])
+        if any(cat.lower() == 'cafes' for cat in selected_categories):
+            midday_types.extend(['cafe'])
+        if midday_types:
+            time_slots.append({
+                'name': 'mid_day',
+                'start_time': '11:00',
+                'end_time': '14:00',
+                'allowed_types': midday_types,
+                'max_places': 2
+            })
+        
+        # Afternoon slot - prioritize museums, parks, cafes (only if selected)
+        afternoon_types = []
+        if any(cat.lower() == 'museums' for cat in selected_categories):
+            afternoon_types.extend(['museum', 'art_gallery', 'library'])
+        if any(cat.lower() == 'parks' for cat in selected_categories):
+            afternoon_types.append('park')
+        if any(cat.lower() == 'cafes' for cat in selected_categories):
+            afternoon_types.append('cafe')
+        if any(cat.lower() == 'shopping' for cat in selected_categories):
+            afternoon_types.extend(['shopping_mall', 'store'])
+        # If no specific afternoon categories, allow restaurants/cafes
+        if not afternoon_types:
+            if any(cat.lower() == 'restaurants' for cat in selected_categories):
+                afternoon_types.extend(['restaurant', 'cafe'])
+            elif any(cat.lower() == 'cafes' for cat in selected_categories):
+                afternoon_types.append('cafe')
+        if afternoon_types:
+            time_slots.append({
+                'name': 'afternoon',
+                'start_time': '14:00',
+                'end_time': '17:00',
+                'allowed_types': afternoon_types,
+                'max_places': 2
+            })
+        
+        # Evening slot - prioritize restaurants and bars
+        evening_types = []
+        if any(cat.lower() == 'restaurants' for cat in selected_categories):
+            evening_types.extend(['restaurant', 'food'])
+        if any(cat.lower() == 'bars' for cat in selected_categories):
+            evening_types.extend(['bar', 'night_club', 'lounge'])
+        if any(cat.lower() == 'dessert' for cat in selected_categories):
+            evening_types.extend(['bakery', 'cafe'])
+        if evening_types:
+            time_slots.append({
+                'name': 'evening',
+                'start_time': '17:00',
+                'end_time': '20:00',
+                'allowed_types': evening_types,
+                'max_places': 2
+            })
+        
+        # If no time slots were created (shouldn't happen, but safety check)
+        if not time_slots:
+            # Fallback: create a single slot with all selected types
+            fallback_types = list(allowed_types_set)
+            if fallback_types:
+                time_slots.append({
+                    'name': 'all_day',
+                    'start_time': '09:00',
+                    'end_time': '20:00',
+                    'allowed_types': fallback_types,
+                    'max_places': 4
+                })
+        
+        print(f"DEBUG: Selected categories: {selected_categories}")
+        print(f"DEBUG: Created {len(time_slots)} time slots based on selected categories:")
+        for slot in time_slots:
+            print(f"  - {slot['name']}: {slot['allowed_types']}")
+        
+        # Filter places by selected categories (using allowed_types_set built above)
         filtered_places = []
-        if selected_categories:
-            allowed_types_set = set()
-            for category in selected_categories:
-                if category.lower() in category_to_types:
-                    allowed_types_set.update(category_to_types[category.lower()])
-            
+        if selected_categories and allowed_types_set:
             for place in places_data:
                 place_types = [t.lower() for t in place.get('types', [])]
                 if any(t in allowed_types_set for t in place_types):
@@ -589,5 +651,597 @@ def generate_day_itinerary(request):
         print(f"DEBUG: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to generate itinerary: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# ============================================================================
+# Public Itinerary Sharing Feature
+# ============================================================================
+
+@api_view(['POST'])
+@permission_classes([])
+def submit_public_itinerary(request):
+    """
+    Submit an itinerary to the public feed.
+    Creates a public itinerary with status='pending' in Firestore.
+    """
+    import json
+    from datetime import datetime
+    
+    try:
+        print(f"DEBUG: Received submit itinerary request")
+        print(f"DEBUG: Content-Type: {request.content_type}")
+        print(f"DEBUG: Content-Length: {request.META.get('CONTENT_LENGTH', 'unknown')}")
+        
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        print(f"DEBUG: Parsed data successfully")
+        print(f"DEBUG: Items count: {len(data.get('items', []))}")
+        
+        user_id = data.get('user_id')
+        user_name = data.get('user_name', 'Anonymous')
+        user_photo_url = data.get('user_photo_url')
+        title = data.get('title')
+        description = data.get('description')
+        location = data.get('location')
+        
+        # Handle latitude/longitude with defaults
+        try:
+            latitude = float(data.get('latitude', 0.0))
+        except (ValueError, TypeError):
+            latitude = 0.0
+        
+        try:
+            longitude = float(data.get('longitude', 0.0))
+        except (ValueError, TypeError):
+            longitude = 0.0
+        
+        neighborhood = data.get('neighborhood', 'Local area')
+        categories = data.get('categories', [])
+        items = data.get('items', [])
+        
+        if not all([user_id, title, description, location]):
+            return Response(
+                {"error": "Missing required fields: user_id, title, description, location"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create document in Firestore
+        itinerary_data = {
+            'user_id': user_id,
+            'user_name': user_name,
+            'user_photo_url': user_photo_url,
+            'title': title,
+            'description': description,
+            'location': location,
+            'latitude': latitude,
+            'longitude': longitude,
+            'neighborhood': neighborhood,
+            'categories': categories,
+            'items': items,
+            'status': 'pending',
+            'likes_count': 0,
+            'shares_count': 0,
+            'added_to_schedule_count': 0,
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        
+        doc_ref = db.collection('public_itineraries').add(itinerary_data)
+        itinerary_id = doc_ref[1].id
+        
+        # Update user stats
+        user_stats_ref = db.collection('user_stats').document(user_id)
+        user_stats_doc = user_stats_ref.get()
+        
+        if user_stats_doc.exists:
+            user_stats_ref.update({
+                'total_public_itineraries': firestore.Increment(1),
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+        else:
+            user_stats_ref.set({
+                'user_id': user_id,
+                'total_public_itineraries': 1,
+                'total_likes_received': 0,
+                'profile_photo_url': user_photo_url,
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+        
+        return Response({
+            'itinerary_id': itinerary_id,
+            'status': 'pending',
+            'message': 'Itinerary submitted successfully. Awaiting approval.'
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error submitting public itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to submit itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([])
+def get_public_itineraries(request):
+    """
+    Get public itineraries with optional filtering and sorting.
+    Query params: location, categories (comma-separated), sort (likes/recent), limit, offset
+    """
+    try:
+        location = request.query_params.get('location', '').strip()
+        categories_str = request.query_params.get('categories', '')
+        categories = [c.strip() for c in categories_str.split(',') if c.strip()] if categories_str else []
+        sort_by = request.query_params.get('sort', 'recent')  # 'likes' or 'recent'
+        limit = int(request.query_params.get('limit', 20))
+        offset = int(request.query_params.get('offset', 0))
+        
+        # Build query
+        query = db.collection('public_itineraries').where('status', '==', 'approved')
+        
+        # Filter by location (case-insensitive partial match)
+        if location:
+            # Firestore doesn't support case-insensitive search directly
+            # We'll filter in Python after fetching
+            pass
+        
+        # Filter by categories (if any category matches)
+        if categories:
+            # Firestore 'in' query can only check one category at a time
+            # We'll filter in Python after fetching
+            pass
+        
+        # Execute query
+        docs = query.stream()
+        
+        # Convert to list and filter
+        itineraries = []
+        for doc in docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            
+            # Filter by location
+            if location:
+                if location.lower() not in data.get('location', '').lower():
+                    continue
+            
+            # Filter by categories (if any category matches)
+            if categories:
+                itinerary_categories = [c.lower() for c in data.get('categories', [])]
+                if not any(cat.lower() in itinerary_categories for cat in categories):
+                    continue
+            
+            # Get user stats
+            user_id = data.get('user_id')
+            user_stats_doc = db.collection('user_stats').document(user_id).get()
+            if user_stats_doc.exists:
+                stats = user_stats_doc.to_dict()
+                data['user_stats'] = {
+                    'total_public_itineraries': stats.get('total_public_itineraries', 0),
+                    'total_likes_received': stats.get('total_likes_received', 0),
+                }
+            else:
+                data['user_stats'] = {
+                    'total_public_itineraries': 0,
+                    'total_likes_received': 0,
+                }
+            
+            itineraries.append(data)
+        
+        # Sort
+        if sort_by == 'likes':
+            itineraries.sort(key=lambda x: x.get('likes_count', 0), reverse=True)
+        else:  # recent
+            itineraries.sort(key=lambda x: x.get('created_at'), reverse=True)
+        
+        # Paginate
+        total = len(itineraries)
+        itineraries = itineraries[offset:offset + limit]
+        
+        return Response({
+            'itineraries': itineraries,
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error fetching public itineraries: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to fetch itineraries: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def like_public_itinerary(request, itinerary_id):
+    """
+    Toggle like status for a public itinerary.
+    """
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if already liked
+        like_ref = db.collection('public_itineraries').document(itinerary_id).collection('likes').document(user_id)
+        like_doc = like_ref.get()
+        
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        is_liked = like_doc.exists
+        
+        if is_liked:
+            # Unlike: remove like document
+            like_ref.delete()
+            # Decrement likes_count
+            itinerary_ref.update({
+                'likes_count': firestore.Increment(-1),
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+            # Update user stats (decrement likes received for itinerary owner)
+            itinerary_data = itinerary_doc.to_dict()
+            owner_id = itinerary_data.get('user_id')
+            if owner_id:
+                db.collection('user_stats').document(owner_id).update({
+                    'total_likes_received': firestore.Increment(-1),
+                })
+            return Response({'liked': False, 'likes_count': itinerary_data.get('likes_count', 0) - 1})
+        else:
+            # Like: create like document
+            like_ref.set({
+                'user_id': user_id,
+                'liked_at': firestore.SERVER_TIMESTAMP,
+            })
+            # Increment likes_count
+            itinerary_ref.update({
+                'likes_count': firestore.Increment(1),
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+            # Update user stats (increment likes received for itinerary owner)
+            itinerary_data = itinerary_doc.to_dict()
+            owner_id = itinerary_data.get('user_id')
+            if owner_id:
+                db.collection('user_stats').document(owner_id).update({
+                    'total_likes_received': firestore.Increment(1),
+                })
+            return Response({'liked': True, 'likes_count': itinerary_data.get('likes_count', 0) + 1})
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error toggling like: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to toggle like: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def add_public_itinerary_to_schedule(request, itinerary_id):
+    """
+    Copy a public itinerary to user's saved_itineraries.
+    """
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get public itinerary
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        itinerary_data = itinerary_doc.to_dict()
+        
+        # Create saved itinerary
+        saved_itinerary_data = {
+            'user_id': user_id,
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'location': itinerary_data.get('location'),
+            'neighborhood': itinerary_data.get('neighborhood'),
+            'items': itinerary_data.get('items', []),
+            'categories': itinerary_data.get('categories', []),
+        }
+        
+        saved_ref = db.collection('saved_itineraries').add(saved_itinerary_data)
+        
+        # Increment added_to_schedule_count
+        itinerary_ref.update({
+            'added_to_schedule_count': firestore.Increment(1),
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        })
+        
+        return Response({
+            'saved_itinerary_id': saved_ref[1].id,
+            'message': 'Itinerary added to your schedule'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error adding itinerary to schedule: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to add itinerary to schedule: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def share_public_itinerary(request, itinerary_id):
+    """
+    Increment share count for a public itinerary.
+    """
+    try:
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Increment shares_count
+        itinerary_ref.update({
+            'shares_count': firestore.Increment(1),
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        })
+        
+        itinerary_data = itinerary_doc.to_dict()
+        
+        return Response({
+            'shares_count': itinerary_data.get('shares_count', 0) + 1,
+            'share_link': f"https://yourapp.com/itinerary/{itinerary_id}"  # Update with actual app URL
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error sharing itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to share itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['PUT'])
+@permission_classes([])
+def update_public_itinerary(request, itinerary_id):
+    """
+    Update a user's own public itinerary.
+    """
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        itinerary_data = itinerary_doc.to_dict()
+        
+        # Check ownership
+        if itinerary_data.get('user_id') != user_id:
+            return Response(
+                {"error": "You can only edit your own itineraries"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check status (can only edit pending or approved)
+        status_val = itinerary_data.get('status')
+        if status_val not in ['pending', 'approved']:
+            return Response(
+                {"error": "Cannot edit itinerary with current status"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update allowed fields
+        update_data = {
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        
+        if 'title' in data:
+            update_data['title'] = data['title']
+        if 'description' in data:
+            update_data['description'] = data['description']
+        if 'items' in data:
+            update_data['items'] = data['items']
+        if 'categories' in data:
+            update_data['categories'] = data['categories']
+        
+        itinerary_ref.update(update_data)
+        
+        return Response({
+            'message': 'Itinerary updated successfully'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error updating itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to update itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['DELETE'])
+@permission_classes([])
+def delete_public_itinerary(request, itinerary_id):
+    """
+    Delete a user's own public itinerary.
+    """
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        itinerary_data = itinerary_doc.to_dict()
+        
+        # Check ownership
+        if itinerary_data.get('user_id') != user_id:
+            return Response(
+                {"error": "You can only delete your own itineraries"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Delete all likes subcollection
+        likes_ref = itinerary_ref.collection('likes')
+        for like_doc in likes_ref.stream():
+            like_doc.reference.delete()
+        
+        # Delete itinerary
+        itinerary_ref.delete()
+        
+        # Update user stats
+        db.collection('user_stats').document(user_id).update({
+            'total_public_itineraries': firestore.Increment(-1),
+        })
+        
+        return Response({
+            'message': 'Itinerary deleted successfully'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error deleting itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to delete itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def approve_public_itinerary(request, itinerary_id):
+    """
+    Admin endpoint to approve a public itinerary.
+    """
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        admin_user_id = data.get('admin_user_id')
+        
+        # TODO: Add admin check here
+        # For now, allow any user to approve (should be restricted in production)
+        
+        itinerary_ref = db.collection('public_itineraries').document(itinerary_id)
+        itinerary_doc = itinerary_ref.get()
+        
+        if not itinerary_doc.exists:
+            return Response(
+                {"error": "Itinerary not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        itinerary_data = itinerary_doc.to_dict()
+        
+        if itinerary_data.get('status') != 'pending':
+            return Response(
+                {"error": "Itinerary is not pending approval"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update status to approved
+        itinerary_ref.update({
+            'status': 'approved',
+            'approved_at': firestore.SERVER_TIMESTAMP,
+            'approved_by': admin_user_id,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        })
+        
+        return Response({
+            'message': 'Itinerary approved successfully'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error approving itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to approve itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([])
+def get_user_stats(request, user_id):
+    """
+    Get user statistics for public itineraries.
+    """
+    try:
+        user_stats_ref = db.collection('user_stats').document(user_id)
+        user_stats_doc = user_stats_ref.get()
+        
+        if user_stats_doc.exists:
+            stats = user_stats_doc.to_dict()
+            return Response({
+                'user_id': user_id,
+                'total_public_itineraries': stats.get('total_public_itineraries', 0),
+                'total_likes_received': stats.get('total_likes_received', 0),
+                'profile_photo_url': stats.get('profile_photo_url'),
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'user_id': user_id,
+                'total_public_itineraries': 0,
+                'total_likes_received': 0,
+                'profile_photo_url': None,
+            }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error fetching user stats: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to fetch user stats: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

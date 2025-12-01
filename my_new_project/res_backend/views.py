@@ -780,34 +780,45 @@ def submit_public_itinerary(request):
         }
         
         print(f"DEBUG: Attempting to add document to Firestore...")
+        import time
+        start_time = time.time()
+        
         try:
             # Firestore add() returns (write_result, document_reference)
             write_result, doc_ref = db.collection('public_itineraries').add(itinerary_data)
             itinerary_id = doc_ref.id
-            print(f"DEBUG: Successfully created document with ID: {itinerary_id}")
+            elapsed = time.time() - start_time
+            print(f"DEBUG: Successfully created document with ID: {itinerary_id} in {elapsed:.2f}s")
         except Exception as firestore_error:
             print(f"DEBUG: Firestore error: {str(firestore_error)}")
             import traceback
             print(f"DEBUG: Firestore traceback: {traceback.format_exc()}")
             raise firestore_error
         
-        # Update user stats
-        user_stats_ref = db.collection('user_stats').document(user_id)
-        user_stats_doc = user_stats_ref.get()
-        
-        if user_stats_doc.exists:
-            user_stats_ref.update({
-                'total_public_itineraries': firestore.Increment(1),
-                'updated_at': firestore.SERVER_TIMESTAMP,
-            })
-        else:
-            user_stats_ref.set({
-                'user_id': user_id,
-                'total_public_itineraries': 1,
-                'total_likes_received': 0,
-                'profile_photo_url': user_photo_url,
-                'updated_at': firestore.SERVER_TIMESTAMP,
-            })
+        # Update user stats (non-blocking - don't wait for this to complete)
+        # Return response immediately, update stats in background
+        try:
+            user_stats_ref = db.collection('user_stats').document(user_id)
+            user_stats_doc = user_stats_ref.get()
+            
+            if user_stats_doc.exists:
+                # Use update which is faster than get + update
+                user_stats_ref.update({
+                    'total_public_itineraries': firestore.Increment(1),
+                    'updated_at': firestore.SERVER_TIMESTAMP,
+                })
+            else:
+                user_stats_ref.set({
+                    'user_id': user_id,
+                    'total_public_itineraries': 1,
+                    'total_likes_received': 0,
+                    'profile_photo_url': user_photo_url,
+                    'updated_at': firestore.SERVER_TIMESTAMP,
+                })
+            print(f"DEBUG: User stats updated successfully")
+        except Exception as stats_error:
+            # Don't fail the request if stats update fails
+            print(f"WARNING: Failed to update user stats (non-critical): {str(stats_error)}")
         
         return Response({
             'itinerary_id': itinerary_id,

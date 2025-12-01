@@ -94,3 +94,87 @@ class UserInteraction(models.Model):
                 raise ValueError("Rating must be between 1 and 5")
         
         super().save(*args, **kwargs)
+
+class PublicItinerary(models.Model):
+    """Model for public itineraries stored in Firestore.
+    
+    This model represents the structure of public itineraries in Firestore.
+    The actual data is stored in Firestore, but this model helps with
+    type checking and documentation.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    # Firestore document ID (stored as string)
+    firestore_id = models.CharField(max_length=200, unique=True, null=True, blank=True)
+    
+    # User information
+    user_id = models.CharField(max_length=200)
+    user_name = models.CharField(max_length=200)
+    user_photo_url = models.URLField(max_length=500, null=True, blank=True)
+    
+    # Itinerary details
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+    location = models.CharField(max_length=200)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    neighborhood = models.CharField(max_length=200)
+    categories = models.JSONField(default=list)  # Array of category strings
+    
+    # Status and moderation
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.CharField(max_length=200, null=True, blank=True)
+    
+    # Engagement metrics
+    likes_count = models.IntegerField(default=0)
+    shares_count = models.IntegerField(default=0)
+    added_to_schedule_count = models.IntegerField(default=0)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.title} by {self.user_name} ({self.status})"
+
+class ItineraryLike(models.Model):
+    """Tracks likes on public itineraries.
+    
+    This model represents likes stored in Firestore subcollection.
+    """
+    # Firestore document IDs
+    itinerary_firestore_id = models.CharField(max_length=200)
+    user_id = models.CharField(max_length=200)
+    liked_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ('itinerary_firestore_id', 'user_id')
+        ordering = ['-liked_at']
+    
+    def __str__(self):
+        return f"Like by {self.user_id} on {self.itinerary_firestore_id}"
+
+class UserStats(models.Model):
+    """User statistics for public itineraries.
+    
+    Tracks user's public itinerary count and total likes received.
+    """
+    user_id = models.CharField(max_length=200, unique=True)
+    total_public_itineraries = models.IntegerField(default=0)
+    total_likes_received = models.IntegerField(default=0)
+    profile_photo_url = models.URLField(max_length=500, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-total_likes_received']
+    
+    def __str__(self):
+        return f"Stats for {self.user_id}: {self.total_public_itineraries} itineraries, {self.total_likes_received} likes"

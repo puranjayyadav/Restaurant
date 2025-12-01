@@ -26,11 +26,19 @@ if not firebase_admin._apps:
     if firebase_creds_json:
         # Parse JSON string from environment variable
         try:
-            cred_dict = json.loads(firebase_creds_json)
+            # Handle both string and already-parsed JSON
+            if isinstance(firebase_creds_json, str):
+                cred_dict = json.loads(firebase_creds_json)
+            else:
+                cred_dict = firebase_creds_json
+            
             cred = credentials.Certificate(cred_dict)
             print("DEBUG: Initialized Firebase using environment variable")
+            print(f"DEBUG: Firebase project_id: {cred_dict.get('project_id', 'unknown')}")
         except (json.JSONDecodeError, ValueError) as e:
             print(f"ERROR: Failed to parse FIREBASE_CREDENTIALS: {str(e)}")
+            print(f"ERROR: FIREBASE_CREDENTIALS length: {len(firebase_creds_json) if firebase_creds_json else 0}")
+            print(f"ERROR: First 100 chars: {firebase_creds_json[:100] if firebase_creds_json else 'None'}")
             raise
     else:
         # Fallback to file path (for local development)

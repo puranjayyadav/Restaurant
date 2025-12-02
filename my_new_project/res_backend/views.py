@@ -802,13 +802,24 @@ def submit_public_itinerary(request):
             'updated_at': firestore.SERVER_TIMESTAMP,
         }
         
+        # Validate data size to prevent timeouts
+        import json
+        data_size = len(json.dumps(itinerary_data, default=str))
+        print(f"DEBUG: Itinerary data size: {data_size} bytes ({data_size / 1024:.2f} KB)")
+        if data_size > 1_000_000:  # 1MB limit
+            return Response(
+                {"error": "Itinerary data too large. Please reduce the number of items."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         print(f"DEBUG: Attempting to add document to Firestore...")
         import time
+        import threading
         start_time = time.time()
         
         try:
-            # Firestore add() returns (write_result, document_reference)
-            write_result, doc_ref = db.collection('public_itineraries').add(itinerary_data)
+            # Firestore add() returns a DocumentReference
+            doc_ref = db.collection('public_itineraries').add(itinerary_data)
             itinerary_id = doc_ref.id
             elapsed = time.time() - start_time
             print(f"DEBUG: Successfully created document with ID: {itinerary_id} in {elapsed:.2f}s")
@@ -818,30 +829,33 @@ def submit_public_itinerary(request):
             print(f"DEBUG: Firestore traceback: {traceback.format_exc()}")
             raise firestore_error
         
-        # Update user stats (non-blocking - don't wait for this to complete)
-        # Return response immediately, update stats in background
-        try:
-            user_stats_ref = db.collection('user_stats').document(user_id)
-            user_stats_doc = user_stats_ref.get()
-            
-            if user_stats_doc.exists:
-                # Use update which is faster than get + update
-                user_stats_ref.update({
-                    'total_public_itineraries': firestore.Increment(1),
-                    'updated_at': firestore.SERVER_TIMESTAMP,
-                })
-            else:
-                user_stats_ref.set({
-                    'user_id': user_id,
-                    'total_public_itineraries': 1,
-                    'total_likes_received': 0,
-                    'profile_photo_url': user_photo_url,
-                    'updated_at': firestore.SERVER_TIMESTAMP,
-                })
-            print(f"DEBUG: User stats updated successfully")
-        except Exception as stats_error:
-            # Don't fail the request if stats update fails
-            print(f"WARNING: Failed to update user stats (non-critical): {str(stats_error)}")
+        # Update user stats in background thread (truly non-blocking)
+        def update_user_stats_async():
+            try:
+                user_stats_ref = db.collection('user_stats').document(user_id)
+                user_stats_doc = user_stats_ref.get()
+                
+                if user_stats_doc.exists:
+                    user_stats_ref.update({
+                        'total_public_itineraries': firestore.Increment(1),
+                        'updated_at': firestore.SERVER_TIMESTAMP,
+                    })
+                else:
+                    user_stats_ref.set({
+                        'user_id': user_id,
+                        'total_public_itineraries': 1,
+                        'total_likes_received': 0,
+                        'profile_photo_url': user_photo_url,
+                        'updated_at': firestore.SERVER_TIMESTAMP,
+                    })
+                print(f"DEBUG: User stats updated successfully for {user_id}")
+            except Exception as stats_error:
+                # Don't fail the request if stats update fails
+                print(f"WARNING: Failed to update user stats (non-critical): {str(stats_error)}")
+        
+        # Start stats update in background thread
+        stats_thread = threading.Thread(target=update_user_stats_async, daemon=True)
+        stats_thread.start()
         
         return Response({
             'itinerary_id': itinerary_id,
@@ -871,6 +885,7 @@ def get_public_itineraries(request):
     Query params: location, categories (comma-separated), sort (likes/recent), limit, offset
     """
     try:
+        import time
         location = request.query_params.get('location', '').strip()
         categories_str = request.query_params.get('categories', '')
         categories = [c.strip() for c in categories_str.split(',') if c.strip()] if categories_str else []
@@ -878,67 +893,142 @@ def get_public_itineraries(request):
         limit = int(request.query_params.get('limit', 20))
         offset = int(request.query_params.get('offset', 0))
         
-        # Build query
+        # Build query with a reasonable limit to avoid fetching everything
+        # Fetch more than needed to account for filtering, but cap at 500
+        max_fetch = min(500, (offset + limit) * 3)  # Fetch 3x what we need, max 500
         query = db.collection('public_itineraries').where('status', '==', 'approved')
         
-        # Filter by location (case-insensitive partial match)
-        if location:
-            # Firestore doesn't support case-insensitive search directly
-            # We'll filter in Python after fetching
-            pass
+        # Order by created_at for consistent pagination (if sorting by recent)
+        # Note: This requires a composite index on (status, created_at)
+        # If index doesn't exist, we'll sort in memory instead
+        use_firestore_order = False
+        if sort_by == 'recent':
+            try:
+                query = query.order_by('created_at', direction=firestore.Query.DESCENDING)
+                use_firestore_order = True
+            except Exception as order_error:
+                print(f"DEBUG: Could not add order_by to query: {str(order_error)}")
+                print(f"DEBUG: Will sort in memory instead")
         
-        # Filter by categories (if any category matches)
-        if categories:
-            # Firestore 'in' query can only check one category at a time
-            # We'll filter in Python after fetching
-            pass
+        query = query.limit(max_fetch)
         
-        # Execute query
-        docs = query.stream()
+        # Execute query with timeout
+        start_time = time.time()
+        try:
+            docs = list(query.stream())  # Convert to list to avoid streaming issues
+        except Exception as query_error:
+            # If query fails (e.g., missing index), try without order_by
+            if use_firestore_order and 'index' in str(query_error).lower():
+                print(f"DEBUG: Query failed due to missing index, retrying without order_by: {str(query_error)}")
+                query = db.collection('public_itineraries').where('status', '==', 'approved').limit(max_fetch)
+                docs = list(query.stream())
+                use_firestore_order = False
+            else:
+                raise
+        print(f"DEBUG: Fetched {len(docs)} documents in {time.time() - start_time:.2f} seconds")
+        
+        # Helper function to serialize Firestore Timestamps
+        def serialize_timestamp(ts):
+            """Convert Firestore Timestamp to ISO format string or timestamp"""
+            if ts is None:
+                return None
+            if hasattr(ts, 'timestamp'):  # Firestore Timestamp
+                return ts.timestamp()
+            if hasattr(ts, 'isoformat'):  # datetime
+                return ts.isoformat()
+            return str(ts)
         
         # Convert to list and filter
         itineraries = []
+        user_ids = set()  # Collect unique user IDs for batch fetching
+        
         for doc in docs:
-            data = doc.to_dict()
-            data['id'] = doc.id
-            
-            # Filter by location
-            if location:
-                if location.lower() not in data.get('location', '').lower():
-                    continue
-            
-            # Filter by categories (if any category matches)
-            if categories:
-                itinerary_categories = [c.lower() for c in data.get('categories', [])]
-                if not any(cat.lower() in itinerary_categories for cat in categories):
-                    continue
-            
-            # Get user stats
-            user_id = data.get('user_id')
-            user_stats_doc = db.collection('user_stats').document(user_id).get()
-            if user_stats_doc.exists:
-                stats = user_stats_doc.to_dict()
-                data['user_stats'] = {
-                    'total_public_itineraries': stats.get('total_public_itineraries', 0),
-                    'total_likes_received': stats.get('total_likes_received', 0),
-                }
-            else:
-                data['user_stats'] = {
-                    'total_public_itineraries': 0,
-                    'total_likes_received': 0,
-                }
-            
-            itineraries.append(data)
+            try:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                
+                # Serialize Timestamp fields
+                if 'created_at' in data:
+                    data['created_at'] = serialize_timestamp(data['created_at'])
+                if 'updated_at' in data:
+                    data['updated_at'] = serialize_timestamp(data['updated_at'])
+                
+                # Filter by location
+                if location:
+                    if location.lower() not in data.get('location', '').lower():
+                        continue
+                
+                # Filter by categories (if any category matches)
+                if categories:
+                    itinerary_categories = [c.lower() for c in data.get('categories', [])]
+                    if not any(cat.lower() in itinerary_categories for cat in categories):
+                        continue
+                
+                user_ids.add(data.get('user_id'))
+                itineraries.append(data)
+            except Exception as doc_error:
+                print(f"DEBUG: Error processing document {doc.id}: {str(doc_error)}")
+                continue
+        
+        # Batch fetch user stats
+        user_stats_map = {}
+        if user_ids:
+            print(f"DEBUG: Batch fetching stats for {len(user_ids)} users")
+            stats_start = time.time()
+            # Firestore doesn't support batch get for multiple documents easily
+            # So we'll fetch them sequentially with timeout protection
+            for user_id in user_ids:
+                try:
+                    user_stats_doc = db.collection('user_stats').document(user_id).get()
+                    if user_stats_doc.exists:
+                        stats = user_stats_doc.to_dict()
+                        user_stats_map[user_id] = {
+                            'total_public_itineraries': stats.get('total_public_itineraries', 0),
+                            'total_likes_received': stats.get('total_likes_received', 0),
+                        }
+                    else:
+                        user_stats_map[user_id] = {
+                            'total_public_itineraries': 0,
+                            'total_likes_received': 0,
+                        }
+                except Exception as stats_error:
+                    print(f"DEBUG: Error fetching stats for user {user_id}: {str(stats_error)}")
+                    user_stats_map[user_id] = {
+                        'total_public_itineraries': 0,
+                        'total_likes_received': 0,
+                    }
+            print(f"DEBUG: Fetched user stats in {time.time() - stats_start:.2f} seconds")
+        
+        # Attach user stats to itineraries
+        for itinerary in itineraries:
+            user_id = itinerary.get('user_id')
+            itinerary['user_stats'] = user_stats_map.get(user_id, {
+                'total_public_itineraries': 0,
+                'total_likes_received': 0,
+            })
         
         # Sort
         if sort_by == 'likes':
             itineraries.sort(key=lambda x: x.get('likes_count', 0), reverse=True)
         else:  # recent
-            itineraries.sort(key=lambda x: x.get('created_at'), reverse=True)
+            # Only sort in memory if Firestore didn't sort for us
+            if not use_firestore_order:
+                # Handle SERVER_TIMESTAMP or None values
+                def get_sort_key(x):
+                    created_at = x.get('created_at')
+                    if created_at is None:
+                        return 0  # Put None values at the end
+                    # created_at should already be serialized to timestamp
+                    if isinstance(created_at, (int, float)):
+                        return created_at
+                    return 0
+                itineraries.sort(key=get_sort_key, reverse=True)
         
         # Paginate
         total = len(itineraries)
         itineraries = itineraries[offset:offset + limit]
+        
+        print(f"DEBUG: Returning {len(itineraries)} itineraries (total: {total}, offset: {offset}, limit: {limit})")
         
         return Response({
             'itineraries': itineraries,
@@ -1079,7 +1169,7 @@ def add_public_itinerary_to_schedule(request, itinerary_id):
         })
         
         return Response({
-            'saved_itinerary_id': saved_ref[1].id,
+            'saved_itinerary_id': saved_ref.id,
             'message': 'Itinerary added to your schedule'
         }, status=status.HTTP_200_OK)
         

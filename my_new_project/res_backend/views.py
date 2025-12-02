@@ -818,8 +818,8 @@ def submit_public_itinerary(request):
         start_time = time.time()
         
         try:
-            # Firestore add() returns a DocumentReference
-            doc_ref = db.collection('public_itineraries').add(itinerary_data)
+            # Firestore add() returns a tuple (timestamp, DocumentReference)
+            timestamp, doc_ref = db.collection('public_itineraries').add(itinerary_data)
             itinerary_id = doc_ref.id
             elapsed = time.time() - start_time
             print(f"DEBUG: Successfully created document with ID: {itinerary_id} in {elapsed:.2f}s")

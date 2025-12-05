@@ -2,10 +2,36 @@
 Utility functions for restaurant matching and enrichment
 """
 from .models import ScrapedRestaurant
-from fuzzywuzzy import fuzz
 import math
 from django.db.models import Q
 from math import radians, cos
+
+# Try to import fuzzywuzzy, fallback to simple string matching if not available
+try:
+    from fuzzywuzzy import fuzz
+    FUZZYWUZZY_AVAILABLE = True
+except ImportError:
+    FUZZYWUZZY_AVAILABLE = False
+    # Simple fallback function for string similarity
+    def _simple_ratio(s1, s2):
+        """Simple string similarity ratio (0-100)"""
+        s1_lower = s1.lower().strip()
+        s2_lower = s2.lower().strip()
+        if s1_lower == s2_lower:
+            return 100
+        if s1_lower in s2_lower or s2_lower in s1_lower:
+            return 80
+        # Count common characters
+        common = sum(1 for c in s1_lower if c in s2_lower)
+        total = max(len(s1_lower), len(s2_lower))
+        return int((common / total) * 100) if total > 0 else 0
+    
+    # Create a mock fuzz object
+    class MockFuzz:
+        @staticmethod
+        def ratio(s1, s2):
+            return _simple_ratio(s1, s2)
+    fuzz = MockFuzz()
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):

@@ -8,10 +8,16 @@ from firebase_admin import credentials, firestore
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Establishment, EstablishmentFeature
-from .serializers import EstablishmentSerializer, EstablishmentFeatureSerializer
+from .models import Establishment, EstablishmentFeature, ScrapedRestaurant, PreCreatedItinerary
+from .serializers import (
+    EstablishmentSerializer, EstablishmentFeatureSerializer,
+    ScrapedRestaurantSerializer, ScrapedRestaurantListSerializer
+)
+from django.db.models import Q
+from math import radians, cos, sin, asin, sqrt
 from django.shortcuts import get_object_or_404
 from .recommendation import RestaurantRecommender
+from .utils import match_restaurant_with_postgres, enrich_restaurant_data
 import uuid
 
 # Initialize Firebase app (if not already initialized)
@@ -477,6 +483,7 @@ def generate_day_itinerary(request):
         selected_categories = data.get('selected_categories', [])
         max_distance_km = float(data.get('max_distance_km', 3.0))  # Increased from 1.5 to 3.0 for rural areas
         places_data = data.get('places', [])  # Places fetched from Google API by Flutter
+        vegetarian_filter = data.get('vegetarian_filter', False)  # Vegetarian filter option
         
         print(f"DEBUG: Using max distance: {max_distance_km}km between places")
         
@@ -606,6 +613,27 @@ def generate_day_itinerary(request):
         else:
             filtered_places = places_data
         
+        # Apply vegetarian filter if enabled
+        if vegetarian_filter:
+            vegetarian_keywords = ['vegetarian', 'vegan', 'plant-based', 'veggie']
+            vegetarian_filtered = []
+            for place in filtered_places:
+                # Check place name, description, or tags for vegetarian keywords
+                place_name = place.get('name', '').lower()
+                place_description = place.get('description', '').lower()
+                place_tags = [tag.lower() for tag in place.get('tags', [])]
+                place_types = [t.lower() for t in place.get('types', [])]
+                
+                # Combine all text fields to search
+                all_text = ' '.join([place_name, place_description] + place_tags + place_types)
+                
+                # Check if any vegetarian keyword is present
+                if any(keyword in all_text for keyword in vegetarian_keywords):
+                    vegetarian_filtered.append(place)
+            
+            filtered_places = vegetarian_filtered
+            print(f"DEBUG: After vegetarian filter: {len(filtered_places)} places remaining")
+        
         # Haversine distance calculation
         def calculate_distance(lat1, lon1, lat2, lon2):
             R = 6371  # Earth radius in km
@@ -711,6 +739,332 @@ def generate_day_itinerary(request):
         print(f"DEBUG: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to generate itinerary: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def generate_and_enrich_itinerary(request):
+    """
+    Generate a day itinerary with Postgres enrichment.
+    
+    Accepts places from frontend (fetched via Google Places API) and enriches
+    them with data from Postgres database when matches are found.
+    
+    Query params:
+    - cuisine: Cuisine type filter (e.g., "Italian", "French")
+    - price_range: Price range filter (e.g., "$30 and under", "$31-$50", "$50+")
+    - min_rating: Minimum rating (0-5)
+    - tags: Comma-separated tags (e.g., "Neighborhood gem,Charming")
+    - latitude: User latitude
+    - longitude: User longitude
+    - radius_km: Search radius in km (1 or 3)
+    - places: List of places from Google Places API (optional, if not provided will use filters)
+    """
+    import math
+    import json
+    
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        
+        # Get location
+        latitude = float(data.get('latitude'))
+        longitude = float(data.get('longitude'))
+        radius_km = float(data.get('radius_km', 3.0))
+        
+        # Get filters
+        cuisine = data.get('cuisine', '').strip()
+        price_range = data.get('price_range', '').strip()
+        min_rating = float(data.get('min_rating', 0))
+        tags_str = data.get('tags', '')
+        tags = [t.strip() for t in tags_str.split(',') if t.strip()] if tags_str else []
+        
+        # Get places from frontend (already fetched via Google Places API)
+        places_data = data.get('places', [])
+        
+        # If no places provided, return error (frontend should fetch places first)
+        if not places_data:
+            return Response(
+                {"error": "No places provided. Please fetch places from Google Places API first."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Filter places based on criteria
+        filtered_places = []
+        for place in places_data:
+            # Filter by rating
+            place_rating = place.get('rating', 0)
+            if place_rating < min_rating:
+                continue
+            
+            # Filter by price level (Google Places uses 0-4)
+            if price_range:
+                place_price_level = place.get('price_level', -1)
+                price_mapping = {
+                    '$30 and under': [0, 1],  # $ and $$
+                    '$31-$50': [2],  # $$$
+                    '$50+': [3, 4]  # $$$$ and above
+                }
+                if price_range in price_mapping:
+                    if place_price_level not in price_mapping[price_range]:
+                        continue
+            
+            # Filter by cuisine (check types and name)
+            if cuisine:
+                place_types = [t.lower() for t in place.get('types', [])]
+                place_name = place.get('name', '').lower()
+                cuisine_lower = cuisine.lower()
+                
+                # Check if cuisine matches any type or name
+                cuisine_match = (
+                    cuisine_lower in place_name or
+                    any(cuisine_lower in t for t in place_types) or
+                    any(t in ['restaurant', 'food', 'meal_takeaway'] for t in place_types)
+                )
+                if not cuisine_match:
+                    continue
+            
+            # Filter by tags (check in name, types, or description)
+            if tags:
+                place_name = place.get('name', '').lower()
+                place_types = [t.lower() for t in place.get('types', [])]
+                place_description = place.get('description', '').lower() if place.get('description') else ''
+                
+                # Check if any tag matches
+                tag_match = False
+                for tag in tags:
+                    tag_lower = tag.lower()
+                    if (tag_lower in place_name or 
+                        any(tag_lower in t for t in place_types) or
+                        tag_lower in place_description):
+                        tag_match = True
+                        break
+                
+                if not tag_match:
+                    continue
+            
+            # Check radius (if place has coordinates)
+            geometry = place.get('geometry', {})
+            location = geometry.get('location', {})
+            place_lat = location.get('lat')
+            place_lng = location.get('lng')
+            
+            if place_lat and place_lng:
+                # Calculate distance
+                R = 6371  # Earth radius in km
+                lat1_rad = math.radians(latitude)
+                lat2_rad = math.radians(place_lat)
+                delta_lat = math.radians(place_lat - latitude)
+                delta_lon = math.radians(place_lng - longitude)
+                
+                a = (math.sin(delta_lat / 2) ** 2 +
+                     math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+                c = 2 * math.asin(math.sqrt(a))
+                distance_km = R * c
+                
+                if distance_km <= radius_km:
+                    filtered_places.append(place)
+        
+        if not filtered_places:
+            return Response(
+                {"error": "No places found matching the criteria"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate itinerary using existing logic
+        # Reuse generate_day_itinerary core logic
+        selected_categories = ['restaurants']  # Default to restaurants for discovery
+        max_distance_km = radius_km
+        
+        # Haversine distance calculation
+        def calculate_distance(lat1, lon1, lat2, lon2):
+            R = 6371  # Earth radius in km
+            lat1_rad = math.radians(lat1)
+            lat2_rad = math.radians(lat2)
+            delta_lat = math.radians(lat2 - lat1)
+            delta_lon = math.radians(lon2 - lon1)
+            
+            a = (math.sin(delta_lat / 2) ** 2 +
+                 math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+            c = 2 * math.asin(math.sqrt(a))
+            return R * c
+        
+        # Get place coordinates
+        def get_place_coords(place):
+            geometry = place.get('geometry', {})
+            location = geometry.get('location', {})
+            return (location.get('lat'), location.get('lng'))
+        
+        # Create time slots for itinerary
+        time_slots = [
+            {
+                'name': 'morning',
+                'start_time': '09:00',
+                'end_time': '11:00',
+                'allowed_types': ['cafe', 'bakery', 'restaurant'],
+                'max_places': 2
+            },
+            {
+                'name': 'mid_day',
+                'start_time': '11:00',
+                'end_time': '14:00',
+                'allowed_types': ['restaurant', 'food', 'meal_takeaway'],
+                'max_places': 2
+            },
+            {
+                'name': 'afternoon',
+                'start_time': '14:00',
+                'end_time': '17:00',
+                'allowed_types': ['restaurant', 'cafe'],
+                'max_places': 2
+            },
+            {
+                'name': 'evening',
+                'start_time': '17:00',
+                'end_time': '20:00',
+                'allowed_types': ['restaurant', 'food'],
+                'max_places': 2
+            }
+        ]
+        
+        # Generate itinerary
+        itinerary_items = []
+        last_location = (latitude, longitude)
+        used_place_ids = set()
+        
+        import random
+        
+        for slot in time_slots:
+            slot_places = []
+            
+            # Find places matching this slot's types
+            for place in filtered_places:
+                place_id = place.get('place_id') or place.get('id')
+                if place_id in used_place_ids:
+                    continue
+                
+                place_types = [t.lower() for t in place.get('types', [])]
+                if any(t in slot['allowed_types'] for t in place_types):
+                    coords = get_place_coords(place)
+                    if coords[0] and coords[1]:
+                        distance = calculate_distance(
+                            last_location[0], last_location[1],
+                            coords[0], coords[1]
+                        )
+                        max_dist = max_distance_km * 2 if slot == time_slots[0] else max_distance_km
+                        if distance <= max_dist:
+                            slot_places.append({
+                                'place': place,
+                                'distance': distance,
+                                'coords': coords
+                            })
+            
+            # Sort by distance and select
+            tier1 = [p for p in slot_places if p['distance'] <= 0.5]
+            tier2 = [p for p in slot_places if 0.5 < p['distance'] <= 1.0]
+            tier3 = [p for p in slot_places if 1.0 < p['distance'] <= max_distance_km]
+            
+            random.shuffle(tier1)
+            random.shuffle(tier2)
+            random.shuffle(tier3)
+            
+            sorted_places = tier1 + tier2 + tier3
+            selected = sorted_places[:slot['max_places']]
+            
+            for item in selected:
+                place = item['place']
+                place_id = place.get('place_id') or place.get('id')
+                used_place_ids.add(place_id)
+                
+                distance_km = item['distance']
+                walk_time_minutes = int((distance_km / 5.0) * 60)  # 5 km/h walking speed
+                
+                itinerary_item = {
+                    'slot_name': slot['name'],
+                    'start_time': slot['start_time'],
+                    'place_name': place.get('name', 'Unknown'),
+                    'place_id': place_id,
+                    'latitude': item['coords'][0],
+                    'longitude': item['coords'][1],
+                    'address': place.get('vicinity', place.get('formatted_address', 'Address not available')),
+                    'distance_from_previous': round(distance_km, 2),
+                    'estimated_walk_time': walk_time_minutes,
+                    'types': place.get('types', []),
+                    'photos': place.get('photos', []),
+                    'rating': place.get('rating', 0),
+                    'price_level': place.get('price_level', -1)
+                }
+                itinerary_items.append(itinerary_item)
+                last_location = item['coords']
+        
+        # Enrich each restaurant with Postgres data
+        enriched_itinerary = []
+        enrichment_stats = {
+            'total_restaurants': len(itinerary_items),
+            'enriched_count': 0,
+            'enrichment_percentage': 0
+        }
+        
+        for item in itinerary_items:
+            # Reconstruct place data from itinerary item
+            place_data = {
+                'name': item.get('place_name'),
+                'geometry': {
+                    'location': {
+                        'lat': item.get('latitude'),
+                        'lng': item.get('longitude')
+                    }
+                },
+                'place_id': item.get('place_id'),
+                'address': item.get('address'),
+                'types': item.get('types', []),
+                'photos': item.get('photos', []),
+                'rating': item.get('rating', 0)
+            }
+            
+            # Try to match with Postgres
+            postgres_match = match_restaurant_with_postgres(place_data)
+            
+            # Enrich if match found
+            if postgres_match:
+                enriched_place = enrich_restaurant_data(place_data, postgres_match)
+                item['is_enriched'] = True
+                item['postgres_data'] = enriched_place.get('postgres_data', {})
+                item['enrichment_metadata'] = enriched_place.get('enrichment_metadata', {})
+                enrichment_stats['enriched_count'] += 1
+            else:
+                item['is_enriched'] = False
+                item['postgres_data'] = {}
+                item['enrichment_metadata'] = {}
+            
+            enriched_itinerary.append(item)
+        
+        # Calculate enrichment percentage
+        if enrichment_stats['total_restaurants'] > 0:
+            enrichment_stats['enrichment_percentage'] = round(
+                (enrichment_stats['enriched_count'] / enrichment_stats['total_restaurants']) * 100, 
+                1
+            )
+        
+        return Response({
+            'itinerary': enriched_itinerary,
+            'total_items': len(enriched_itinerary),
+            'enrichment_stats': enrichment_stats,
+            'filters_applied': {
+                'cuisine': cuisine,
+                'price_range': price_range,
+                'min_rating': min_rating,
+                'tags': tags,
+                'radius_km': radius_km
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error generating enriched itinerary: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to generate enriched itinerary: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1434,5 +1788,568 @@ def get_user_stats(request, user_id):
         print(f"DEBUG: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to fetch user stats: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ============================================================================
+# Scraped Restaurant API Endpoints
+# ============================================================================
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two points in km using Haversine formula"""
+    R = 6371  # Earth radius in km
+    dlat = radians(float(lat2) - float(lat1))
+    dlon = radians(float(lon2) - float(lon1))
+    a = sin(dlat/2)**2 + cos(radians(float(lat1))) * cos(radians(float(lat2))) * sin(dlon/2)**2
+    return 2 * R * asin(sqrt(a))
+
+
+@api_view(['GET'])
+@permission_classes([])
+def get_scraped_restaurants(request):
+    """
+    Get scraped restaurants with filtering options:
+    - city, state: Filter by location
+    - latitude, longitude, radius_km: Filter by proximity
+    - source: Filter by source (yelp, google, etc.)
+    - min_rating: Minimum rating
+    - search: Search by name
+    - limit: Number of results (default 50, max 200)
+    """
+    try:
+        # Get query parameters
+        city = request.GET.get('city')
+        state = request.GET.get('state')
+        source = request.GET.get('source')
+        min_rating = request.GET.get('min_rating')
+        search = request.GET.get('search', '').strip()
+        limit = min(int(request.GET.get('limit', 50)), 200)
+        
+        # Geospatial filtering
+        latitude = request.GET.get('latitude')
+        longitude = request.GET.get('longitude')
+        radius_km = request.GET.get('radius_km', 10)  # Default 10km radius
+        
+        # Start with base query
+        queryset = ScrapedRestaurant.objects.filter(is_active=True, duplicate_of__isnull=True)
+        
+        # Apply filters
+        if city:
+            queryset = queryset.filter(city__icontains=city)
+        if state:
+            queryset = queryset.filter(state__icontains=state)
+        if source:
+            queryset = queryset.filter(source=source)
+        if min_rating:
+            queryset = queryset.filter(rating__gte=float(min_rating))
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) | 
+                Q(address__icontains=search) |
+                Q(categories__icontains=search)
+            )
+        
+        # Geospatial filtering
+        if latitude and longitude:
+            lat = float(latitude)
+            lon = float(longitude)
+            radius = float(radius_km)
+            
+            # Filter by approximate bounding box first (faster)
+            # Rough approximation: 1 degree latitude ≈ 111 km
+            lat_delta = radius / 111.0
+            lon_delta = radius / (111.0 * cos(radians(lat)))
+            
+            queryset = queryset.filter(
+                latitude__gte=lat - lat_delta,
+                latitude__lte=lat + lat_delta,
+                longitude__gte=lon - lon_delta,
+                longitude__lte=lon + lon_delta
+            )
+        
+        # Order by quality and rating
+        queryset = queryset.order_by('-data_quality_score', '-rating', 'name')[:limit]
+        
+        # Calculate distances if lat/lon provided
+        restaurants = list(queryset)
+        if latitude and longitude:
+            lat = float(latitude)
+            lon = float(longitude)
+            radius = float(radius_km)
+            
+            # Filter by exact distance and add distance field
+            results = []
+            for restaurant in restaurants:
+                if restaurant.latitude and restaurant.longitude:
+                    distance = haversine_distance(
+                        lat, lon,
+                        float(restaurant.latitude),
+                        float(restaurant.longitude)
+                    )
+                    if distance <= radius:
+                        restaurant.distance_km = round(distance, 2)
+                        results.append(restaurant)
+            restaurants = results
+            # Re-sort by distance
+            restaurants.sort(key=lambda x: getattr(x, 'distance_km', float('inf')))
+        
+        # Serialize results
+        serializer = ScrapedRestaurantListSerializer(restaurants, many=True)
+        
+        # Add distance to serialized data if available
+        data = serializer.data
+        if latitude and longitude:
+            for i, restaurant in enumerate(restaurants):
+                if hasattr(restaurant, 'distance_km'):
+                    data[i]['distance_km'] = restaurant.distance_km
+        
+        return Response({
+            'count': len(data),
+            'results': data
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error fetching scraped restaurants: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to fetch restaurants: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def get_scraped_restaurant_detail(request, restaurant_id):
+    """Get detailed information about a specific scraped restaurant"""
+    try:
+        restaurant = ScrapedRestaurant.objects.get(id=restaurant_id, is_active=True)
+        serializer = ScrapedRestaurantSerializer(restaurant)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except ScrapedRestaurant.DoesNotExist:
+        return Response(
+            {"error": "Restaurant not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to fetch restaurant: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def create_scraped_restaurant(request):
+    """Create a new scraped restaurant entry"""
+    try:
+        serializer = ScrapedRestaurantSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to create restaurant: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# ============================================================================
+# Discovery & Pre-Created Itineraries
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([])
+def get_pre_created_itineraries(request):
+    """
+    Get pre-created itineraries with optional filtering.
+    
+    Query params:
+    - cuisine: Filter by cuisine type
+    - price_range: Filter by price range
+    - min_rating: Minimum rating
+    - tags: Comma-separated tags
+    - latitude: User latitude (for location filtering)
+    - longitude: User longitude (for location filtering)
+    - radius_km: Search radius in km
+    """
+    try:
+        # Get filter parameters
+        cuisine = request.GET.get('cuisine', '').strip()
+        price_range = request.GET.get('price_range', '').strip()
+        min_rating = float(request.GET.get('min_rating', 0))
+        tags_str = request.GET.get('tags', '')
+        tags = [t.strip() for t in tags_str.split(',') if t.strip()] if tags_str else []
+        latitude = request.GET.get('latitude')
+        longitude = request.GET.get('longitude')
+        radius_km = float(request.GET.get('radius_km', 10.0))  # Default 10km
+        
+        # Start with all pre-created itineraries
+        queryset = PreCreatedItinerary.objects.all()
+        
+        # Apply filters
+        if cuisine:
+            queryset = queryset.filter(cuisine__icontains=cuisine)
+        
+        if price_range:
+            queryset = queryset.filter(price_range=price_range)
+        
+        if min_rating > 0:
+            queryset = queryset.filter(min_rating__gte=min_rating)
+        
+        if tags:
+            # Filter by tags (check if any tag matches)
+            from django.db.models import Q
+            tag_filter = Q()
+            for tag in tags:
+                tag_filter |= Q(tags__icontains=tag)
+            queryset = queryset.filter(tag_filter)
+        
+        # Location-based filtering (if provided)
+        if latitude and longitude:
+            try:
+                user_lat = float(latitude)
+                user_lng = float(longitude)
+                
+                # Filter by radius (simple bounding box approximation)
+                # 1 degree latitude ≈ 111 km
+                lat_range = radius_km / 111.0
+                lng_range = radius_km / (111.0 * abs(math.cos(math.radians(user_lat))))
+                
+                queryset = queryset.filter(
+                    latitude__range=(user_lat - lat_range, user_lat + lat_range),
+                    longitude__range=(user_lng - lng_range, user_lng + lng_range)
+                )
+            except (ValueError, TypeError):
+                pass  # Invalid coordinates, skip location filter
+        
+        # Limit results
+        limit = int(request.GET.get('limit', 20))
+        queryset = queryset[:limit]
+        
+        # Serialize results
+        results = []
+        for itinerary in queryset:
+            results.append({
+                'id': itinerary.id,
+                'title': itinerary.title,
+                'description': itinerary.description,
+                'subtitle': f"{itinerary.neighborhood} • {itinerary.cuisine}" if itinerary.neighborhood and itinerary.cuisine else itinerary.neighborhood or itinerary.cuisine or '',
+                'cuisine': itinerary.cuisine or '',
+                'price_range': itinerary.price_range or '',
+                'min_rating': float(itinerary.min_rating),
+                'tags': itinerary.tags or [],
+                'latitude': float(itinerary.latitude),
+                'longitude': float(itinerary.longitude),
+                'radius_km': float(itinerary.radius_km),
+                'neighborhood': itinerary.neighborhood or '',
+                'restaurant_count': itinerary.total_restaurants,
+                'enriched_count': itinerary.enriched_count,
+                'enrichment_percentage': float(itinerary.enrichment_percentage),
+                'is_featured': itinerary.is_featured,
+                'sample_image_url': itinerary.sample_image_url or '',
+                'itinerary_data': itinerary.itinerary_data,  # Full itinerary data with restaurants
+                'created_at': itinerary.created_at.isoformat(),
+                'last_updated': itinerary.last_updated.isoformat(),
+            })
+        
+        return Response({
+            'itineraries': results,
+            'total': len(results)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error getting pre-created itineraries: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to get pre-created itineraries: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def pre_create_itineraries(request):
+    """
+    Pre-create itineraries for popular combinations.
+    This is a background job that can be called manually or via cron.
+    
+    Creates itineraries for:
+    - Italian + $30 and under + Neighborhood gem (East Village, 1km)
+    - French + $31-$50 + Charming (TriBeCa, 3km)
+    - Mexican + $30 and under + Good for groups (West Village, 1km)
+    - Japanese + $50+ + Good for special occasions (Lower East Side, 3km)
+    - Contemporary American + $31-$50 + Great for brunch (SoHo, 1km)
+    """
+    try:
+        # Popular NYC neighborhood coordinates
+        neighborhoods = {
+            'East Village': (40.7262, -73.9818),
+            'TriBeCa': (40.7181, -74.0086),
+            'West Village': (40.7358, -74.0036),
+            'Lower East Side': (40.7150, -73.9843),
+            'SoHo': (40.7231, -74.0026),
+        }
+        
+        # Popular combinations to pre-create
+        combinations = [
+            {
+                'title': 'Italian Food Tour in East Village',
+                'description': 'Discover authentic Italian restaurants and neighborhood gems',
+                'cuisine': 'Italian',
+                'price_range': '$30 and under',
+                'tags': ['Neighborhood gem'],
+                'neighborhood': 'East Village',
+                'radius_km': 1.0,
+                'is_featured': True,
+            },
+            {
+                'title': 'Charming French Dining in TriBeCa',
+                'description': 'Elegant French restaurants perfect for a special evening',
+                'cuisine': 'French',
+                'price_range': '$31-$50',
+                'tags': ['Charming'],
+                'neighborhood': 'TriBeCa',
+                'radius_km': 3.0,
+                'is_featured': True,
+            },
+            {
+                'title': 'Mexican Fiesta in West Village',
+                'description': 'Vibrant Mexican spots great for groups',
+                'cuisine': 'Mexican',
+                'price_range': '$30 and under',
+                'tags': ['Good for groups'],
+                'neighborhood': 'West Village',
+                'radius_km': 1.0,
+                'is_featured': True,
+            },
+            {
+                'title': 'Upscale Japanese Dining in Lower East Side',
+                'description': 'Fine Japanese restaurants for special occasions',
+                'cuisine': 'Japanese',
+                'price_range': '$50+',
+                'tags': ['Good for special occasions'],
+                'neighborhood': 'Lower East Side',
+                'radius_km': 3.0,
+                'is_featured': True,
+            },
+            {
+                'title': 'Brunch Spots in SoHo',
+                'description': 'Contemporary American brunch favorites',
+                'cuisine': 'Contemporary American',
+                'price_range': '$31-$50',
+                'tags': ['Great for brunch'],
+                'neighborhood': 'SoHo',
+                'radius_km': 1.0,
+                'is_featured': True,
+            },
+        ]
+        
+        created_count = 0
+        errors = []
+        
+        for combo in combinations:
+            try:
+                # Get neighborhood coordinates
+                if combo['neighborhood'] not in neighborhoods:
+                    errors.append(f"Unknown neighborhood: {combo['neighborhood']}")
+                    continue
+                
+                lat, lng = neighborhoods[combo['neighborhood']]
+                
+                # Check if itinerary already exists
+                existing = PreCreatedItinerary.objects.filter(
+                    cuisine=combo['cuisine'],
+                    price_range=combo['price_range'],
+                    neighborhood=combo['neighborhood'],
+                    latitude=lat,
+                    longitude=lng
+                ).first()
+                
+                if existing:
+                    # Update existing
+                    existing.title = combo['title']
+                    existing.description = combo['description']
+                    existing.tags = combo['tags']
+                    existing.radius_km = combo['radius_km']
+                    existing.is_featured = combo['is_featured']
+                    # Note: We don't regenerate the itinerary here - that would require calling
+                    # generate_and_enrich_itinerary which needs places from Google Places API
+                    existing.save()
+                    created_count += 1
+                    continue
+                
+                # Create new (without itinerary data - will be populated when frontend calls generate)
+                itinerary = PreCreatedItinerary.objects.create(
+                    title=combo['title'],
+                    description=combo['description'],
+                    cuisine=combo['cuisine'],
+                    price_range=combo['price_range'],
+                    min_rating=4.0,
+                    tags=combo['tags'],
+                    latitude=lat,
+                    longitude=lng,
+                    radius_km=combo['radius_km'],
+                    neighborhood=combo['neighborhood'],
+                    itinerary_data={},  # Empty - will be populated when generated
+                    total_restaurants=0,
+                    enriched_count=0,
+                    enrichment_percentage=0,
+                    is_featured=combo['is_featured'],
+                )
+                created_count += 1
+                
+            except Exception as e:
+                errors.append(f"Error creating {combo['title']}: {str(e)}")
+        
+        return Response({
+            'created': created_count,
+            'errors': errors,
+            'message': f'Successfully created/updated {created_count} pre-created itineraries'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error pre-creating itineraries: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to pre-create itineraries: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([])
+def get_featured_itineraries(request):
+    """
+    Get featured pre-created itineraries for home page.
+    Returns 6-8 featured itineraries with full itinerary data.
+    
+    Query params:
+    - limit: Number of itineraries to return (default: 8)
+    - include_all: If true, also return non-featured itineraries (default: false)
+    """
+    try:
+        limit = int(request.GET.get('limit', 8))
+        include_all = request.GET.get('include_all', 'false').lower() == 'true'
+        
+        # Get featured itineraries
+        featured = PreCreatedItinerary.objects.filter(
+            is_featured=True
+        ).order_by('-created_at')[:limit]
+        
+        results = []
+        for itinerary in featured:
+            results.append({
+                'id': itinerary.id,
+                'title': itinerary.title,
+                'description': itinerary.description,
+                'subtitle': f"{itinerary.neighborhood} • {itinerary.cuisine}" if itinerary.neighborhood and itinerary.cuisine else itinerary.neighborhood or itinerary.cuisine or '',
+                'cuisine': itinerary.cuisine or '',
+                'price_range': itinerary.price_range or '',
+                'neighborhood': itinerary.neighborhood or '',
+                'restaurant_count': itinerary.total_restaurants,
+                'enriched_count': itinerary.enriched_count,
+                'enrichment_percentage': float(itinerary.enrichment_percentage),
+                'sample_image_url': itinerary.sample_image_url or '',
+                'latitude': float(itinerary.latitude),
+                'longitude': float(itinerary.longitude),
+                'radius_km': float(itinerary.radius_km),
+                'tags': itinerary.tags or [],
+                'is_featured': itinerary.is_featured,
+                'itinerary_data': itinerary.itinerary_data,  # Full itinerary data with restaurants
+                'created_at': itinerary.created_at.isoformat(),
+            })
+        
+        # If include_all is true, also get non-featured itineraries
+        all_itineraries = []
+        if include_all:
+            non_featured = PreCreatedItinerary.objects.filter(
+                is_featured=False
+            ).order_by('-created_at')[:limit]
+            
+            for itinerary in non_featured:
+                all_itineraries.append({
+                    'id': itinerary.id,
+                    'title': itinerary.title,
+                    'description': itinerary.description,
+                    'subtitle': f"{itinerary.neighborhood} • {itinerary.cuisine}" if itinerary.neighborhood and itinerary.cuisine else itinerary.neighborhood or itinerary.cuisine or '',
+                    'cuisine': itinerary.cuisine or '',
+                    'price_range': itinerary.price_range or '',
+                    'neighborhood': itinerary.neighborhood or '',
+                    'restaurant_count': itinerary.total_restaurants,
+                    'enriched_count': itinerary.enriched_count,
+                    'enrichment_percentage': float(itinerary.enrichment_percentage),
+                    'sample_image_url': itinerary.sample_image_url or '',
+                    'latitude': float(itinerary.latitude),
+                    'longitude': float(itinerary.longitude),
+                    'radius_km': float(itinerary.radius_km),
+                    'tags': itinerary.tags or [],
+                    'is_featured': itinerary.is_featured,
+                    'itinerary_data': itinerary.itinerary_data,
+                    'created_at': itinerary.created_at.isoformat(),
+                })
+        
+        return Response({
+            'featured_itineraries': results,
+            'all_itineraries': all_itineraries if include_all else [],
+            'total_featured': len(results),
+            'total_all': len(results) + len(all_itineraries) if include_all else len(results)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error getting featured itineraries: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to get featured itineraries: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def get_pre_created_itinerary_detail(request, itinerary_id):
+    """
+    Get detailed information about a specific pre-created itinerary.
+    Returns full itinerary data including all restaurants.
+    """
+    try:
+        itinerary = PreCreatedItinerary.objects.get(id=itinerary_id)
+        
+        return Response({
+            'id': itinerary.id,
+            'title': itinerary.title,
+            'description': itinerary.description,
+            'subtitle': f"{itinerary.neighborhood} • {itinerary.cuisine}" if itinerary.neighborhood and itinerary.cuisine else itinerary.neighborhood or itinerary.cuisine or '',
+            'cuisine': itinerary.cuisine or '',
+            'price_range': itinerary.price_range or '',
+            'min_rating': float(itinerary.min_rating),
+            'neighborhood': itinerary.neighborhood or '',
+            'restaurant_count': itinerary.total_restaurants,
+            'enriched_count': itinerary.enriched_count,
+            'enrichment_percentage': float(itinerary.enrichment_percentage),
+            'sample_image_url': itinerary.sample_image_url or '',
+            'latitude': float(itinerary.latitude),
+            'longitude': float(itinerary.longitude),
+            'radius_km': float(itinerary.radius_km),
+            'tags': itinerary.tags or [],
+            'is_featured': itinerary.is_featured,
+            'itinerary_data': itinerary.itinerary_data,  # Full itinerary with restaurants
+            'created_at': itinerary.created_at.isoformat(),
+            'last_updated': itinerary.last_updated.isoformat(),
+        }, status=status.HTTP_200_OK)
+        
+    except PreCreatedItinerary.DoesNotExist:
+        return Response(
+            {"error": "Itinerary not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        import traceback
+        print(f"DEBUG: Error getting itinerary detail: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to get itinerary detail: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

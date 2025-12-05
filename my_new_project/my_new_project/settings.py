@@ -98,12 +98,30 @@ WSGI_APPLICATION = 'my_new_project.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Use Supabase PostgreSQL if DATABASE_URL is set, otherwise use SQLite for local dev
+import os
+import dj_database_url
+from decouple import config
+
+# Try to load from .env file first, then fall back to environment variable
+DATABASE_URL = config('DATABASE_URL', default=os.environ.get('DATABASE_URL'))
+if DATABASE_URL:
+    # Use Supabase/PostgreSQL if DATABASE_URL is provided
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    # Default to SQLite for local development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation

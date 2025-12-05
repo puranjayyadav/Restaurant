@@ -5,7 +5,10 @@ from .views import (
     get_personalized_recommendations, generate_day_itinerary,
     submit_public_itinerary, get_public_itineraries, like_public_itinerary,
     add_public_itinerary_to_schedule, share_public_itinerary, update_public_itinerary,
-    delete_public_itinerary, approve_public_itinerary, get_user_stats
+    delete_public_itinerary, approve_public_itinerary, get_user_stats,
+    get_scraped_restaurants, get_scraped_restaurant_detail, create_scraped_restaurant,
+    generate_and_enrich_itinerary, get_pre_created_itineraries, 
+    pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail
 )
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -39,4 +42,14 @@ urlpatterns = [
     path('public-itineraries/<str:itinerary_id>/delete/', delete_public_itinerary, name='delete-itinerary'),
     path('admin/approve-itinerary/<str:itinerary_id>/', approve_public_itinerary, name='approve-itinerary'),
     path('user-stats/<str:user_id>/', get_user_stats, name='user-stats'),
+    # Scraped Restaurant endpoints
+    path('scraped-restaurants/', get_scraped_restaurants, name='scraped-restaurants'),
+    path('scraped-restaurants/<int:restaurant_id>/', get_scraped_restaurant_detail, name='scraped-restaurant-detail'),
+    path('scraped-restaurants/create/', create_scraped_restaurant, name='create-scraped-restaurant'),
+    # Discovery & Pre-Created Itineraries endpoints
+    path('discovery/generate-and-enrich-itinerary/', generate_and_enrich_itinerary, name='generate-and-enrich-itinerary'),
+    path('discovery/pre-created-itineraries/', get_pre_created_itineraries, name='pre-created-itineraries'),
+    path('discovery/pre-created-itineraries/<int:itinerary_id>/', get_pre_created_itinerary_detail, name='pre-created-itinerary-detail'),
+    path('discovery/pre-create-itineraries/', pre_create_itineraries, name='pre-create-itineraries'),
+    path('discovery/featured-itineraries/', get_featured_itineraries, name='featured-itineraries'),
 ]

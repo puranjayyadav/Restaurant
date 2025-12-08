@@ -22,8 +22,8 @@ class Command(BaseCommand):
         # Popular combinations to pre-create
         combinations = [
             {
-                'title': 'Italian Food Tour in East Village',
-                'description': 'Discover authentic Italian restaurants and neighborhood gems',
+                'title': 'La Dolce Vita: East Village Italian Journey',
+                'description': 'Discover authentic Italian trattorias and hidden neighborhood gems where traditional recipes meet East Village charm.',
                 'cuisine': 'Italian',
                 'price_range': '$30 and under',
                 'tags': ['Neighborhood gem'],
@@ -32,8 +32,8 @@ class Command(BaseCommand):
                 'is_featured': True,
             },
             {
-                'title': 'Charming French Dining in TriBeCa',
-                'description': 'Elegant French restaurants perfect for a special evening',
+                'title': 'Parisian Elegance in TriBeCa',
+                'description': 'Experience the sophisticated allure of French dining in TriBeCa\'s elegant restaurants, where classic techniques meet modern innovation.',
                 'cuisine': 'French',
                 'price_range': '$31-$50',
                 'tags': ['Charming'],
@@ -42,8 +42,8 @@ class Command(BaseCommand):
                 'is_featured': True,
             },
             {
-                'title': 'Mexican Fiesta in West Village',
-                'description': 'Vibrant Mexican spots great for groups',
+                'title': 'West Village Fiesta',
+                'description': 'Savor vibrant Mexican flavors in the heart of the West Village, where festive cantinas and authentic taquerias create unforgettable group dining experiences.',
                 'cuisine': 'Mexican',
                 'price_range': '$30 and under',
                 'tags': ['Good for groups'],
@@ -52,8 +52,8 @@ class Command(BaseCommand):
                 'is_featured': True,
             },
             {
-                'title': 'Upscale Japanese Dining in Lower East Side',
-                'description': 'Fine Japanese restaurants for special occasions',
+                'title': 'Omakase Experience: Lower East Side',
+                'description': 'Discover exceptional Japanese dining in the Lower East Side, where omakase experiences and innovative izakayas redefine fine dining.',
                 'cuisine': 'Japanese',
                 'price_range': '$50+',
                 'tags': ['Good for special occasions'],
@@ -62,8 +62,8 @@ class Command(BaseCommand):
                 'is_featured': True,
             },
             {
-                'title': 'Brunch Spots in SoHo',
-                'description': 'Contemporary American brunch favorites',
+                'title': 'SoHo Brunch Scene',
+                'description': 'Start your weekend right with SoHo\'s most celebrated brunch spots, where innovative American cuisine meets the neighborhood\'s artistic energy.',
                 'cuisine': 'Contemporary American',
                 'price_range': '$31-$50',
                 'tags': ['Great for brunch'],

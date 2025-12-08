@@ -1,0 +1,52 @@
+[
+  {
+    "cuisine": "Italian",
+    "neighborhood": "East Village",
+    "price_range": "$30 and under",
+    "tags": [
+      "Neighborhood gem"
+    ],
+    "title": "La Dolce Vita: East Village Italian Journey",
+    "description": "Discover authentic Italian trattorias and hidden neighborhood gems where traditional recipes meet East Village charm."
+  },
+  {
+    "cuisine": "French",
+    "neighborhood": "TriBeCa",
+    "price_range": "$31-$50",
+    "tags": [
+      "Charming"
+    ],
+    "title": "Parisian Elegance in TriBeCa",
+    "description": "Experience the sophisticated allure of French dining in TriBeCa's elegant restaurants, where classic techniques meet modern innovation."
+  },
+  {
+    "cuisine": "Mexican",
+    "neighborhood": "West Village",
+    "price_range": "$30 and under",
+    "tags": [
+      "Good for groups"
+    ],
+    "title": "West Village Fiesta",
+    "description": "Savor vibrant Mexican flavors in the heart of the West Village, where festive cantinas and authentic taquerias create unforgettable group dining experiences."
+  },
+  {
+    "cuisine": "Japanese",
+    "neighborhood": "Lower East Side",
+    "price_range": "$50+",
+    "tags": [
+      "Good for special occasions"
+    ],
+    "title": "Omakase Experience: Lower East Side",
+    "description": "Discover exceptional Japanese dining in the Lower East Side, where omakase experiences and innovative izakayas redefine fine dining."
+  },
+  {
+    "cuisine": "Contemporary American",
+    "neighborhood": "SoHo",
+    "price_range": "$31-$50",
+    "tags": [
+      "Great for brunch"
+    ],
+    "title": "SoHo Brunch Scene",
+    "description": "Start your weekend right with SoHo's most celebrated brunch spots, where innovative American cuisine meets the neighborhood's artistic energy."
+  }
+]

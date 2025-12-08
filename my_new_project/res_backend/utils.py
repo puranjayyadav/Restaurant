@@ -315,54 +315,130 @@ def query_scraped_restaurants(lat, lng, radius_km, filters=None, require_coordin
     return results
 
 
-def calculate_restaurant_score(restaurant, filters=None):
+def calculate_restaurant_score(restaurant, filters=None, user_preferences=None):
     """
-    Calculate a score for a restaurant based on quality, rating, and filter match.
+    Calculate a score for a restaurant based on quality, rating, filter match, and user preferences.
     
     Args:
-        restaurant: ScrapedRestaurant object
+        restaurant: ScrapedRestaurant object or dict with place data
         filters: Optional dict with filters (for match bonus)
+        user_preferences: Optional dict with user preferences:
+            - preferred_cuisines: List of preferred cuisine types
+            - price_sensitivity: 'low', 'medium', 'high'
+            - preferred_tags: List of preferred tags
     
     Returns:
-        Score (0-100)
+        Score (0-100) for use as OR-Tools penalty
     """
     score = 0
     
+    # Handle both ScrapedRestaurant objects and dicts (from Google Places)
+    if isinstance(restaurant, dict):
+        # Google Places data format
+        rating = restaurant.get('rating') or 0
+        rating = float(rating) if rating else 0
+        
+        # Handle None values for user_ratings_total
+        total_reviews_raw = restaurant.get('user_ratings_total')
+        total_reviews = int(total_reviews_raw) if total_reviews_raw is not None else 0
+        
+        categories = restaurant.get('types', [])
+        price_level = restaurant.get('price_level', -1)
+        name = restaurant.get('name', '')
+        description = restaurant.get('description', '') or ''
+        photos = restaurant.get('photos', [])
+        data_quality_score = 50  # Default for Google Places data
+    else:
+        # ScrapedRestaurant object
+        rating = float(restaurant.rating) if restaurant.rating else 0
+        total_reviews = int(restaurant.total_reviews) if restaurant.total_reviews is not None else 0
+        categories = restaurant.categories or []
+        price_level = -1  # Will use price_range instead
+        name = restaurant.name
+        description = restaurant.description or ''
+        photos = restaurant.photos or []
+        data_quality_score = restaurant.data_quality_score if restaurant.data_quality_score is not None else 50
+    
     # Base quality (40 points)
-    score += restaurant.data_quality_score * 0.4
+    # Ensure data_quality_score is a number
+    data_quality_score = float(data_quality_score) if data_quality_score is not None else 50.0
+    score += data_quality_score * 0.4
     
     # Rating (30 points)
-    if restaurant.rating:
-        score += (float(restaurant.rating) / 5.0) * 30
+    if rating:
+        score += (float(rating) / 5.0) * 30
     
     # Review count (10 points)
-    if restaurant.total_reviews:
-        if restaurant.total_reviews > 100:
-            score += 10
-        elif restaurant.total_reviews > 50:
-            score += 5
-        elif restaurant.total_reviews > 20:
-            score += 2
+    if total_reviews > 100:
+        score += 10
+    elif total_reviews > 50:
+        score += 5
+    elif total_reviews > 20:
+        score += 2
     
     # Data richness (20 points)
-    if restaurant.menu_items and len(restaurant.menu_items) > 0:
-        score += 5
-    if restaurant.photos and len(restaurant.photos) > 0:
-        score += 5
-    if restaurant.raw_data and restaurant.raw_data.get('reviews'):
-        score += 5
-    if restaurant.description:
-        score += 5
+    if isinstance(restaurant, dict):
+        # Google Places format
+        if photos and len(photos) > 0:
+            score += 5
+        if description:
+            score += 5
+        # Assume some data richness for Google Places
+        score += 10
+    else:
+        # ScrapedRestaurant format
+        if restaurant.menu_items and len(restaurant.menu_items) > 0:
+            score += 5
+        if photos and len(photos) > 0:
+            score += 5
+        if restaurant.raw_data and restaurant.raw_data.get('reviews'):
+            score += 5
+        if description:
+            score += 5
+    
+    # User preference bonus (up to 20 points)
+    if user_preferences:
+        # Preferred cuisine match (+20 points)
+        if user_preferences.get('preferred_cuisines'):
+            preferred = [c.lower() for c in user_preferences['preferred_cuisines']]
+            categories_lower = [c.lower() for c in categories]
+            name_lower = name.lower()
+            desc_lower = description.lower()
+            
+            for cuisine in preferred:
+                if (cuisine in name_lower or
+                    any(cuisine in cat for cat in categories_lower) or
+                    cuisine in desc_lower):
+                    score += 20
+                    break
+        
+        # Preferred tag match (+10 points)
+        if user_preferences.get('preferred_tags'):
+            preferred_tags = [t.lower() for t in user_preferences['preferred_tags']]
+            if isinstance(restaurant, dict):
+                # Check in types/categories
+                for tag in preferred_tags:
+                    if any(tag in str(c).lower() for c in categories):
+                        score += 10
+                        break
+            else:
+                restaurant_tags = restaurant.raw_data.get('tags', []) if restaurant.raw_data else []
+                restaurant_features = restaurant.features or []
+                for tag in preferred_tags:
+                    if (any(tag in str(t).lower() for t in restaurant_tags) or
+                        any(tag in str(f).lower() for f in restaurant_features)):
+                        score += 10
+                        break
     
     # Filter match bonus (optional)
     if filters:
         # Cuisine match
         if filters.get('cuisine'):
             cuisine = filters['cuisine'].lower()
-            categories = [c.lower() for c in (restaurant.categories or [])]
-            if (cuisine in restaurant.name.lower() or
-                any(cuisine in cat for cat in categories) or
-                (restaurant.description and cuisine in restaurant.description.lower())):
+            categories_lower = [c.lower() for c in categories]
+            if (cuisine in name.lower() or
+                any(cuisine in cat for cat in categories_lower) or
+                cuisine in description.lower()):
                 score += 10
         
         # Price match
@@ -374,24 +450,152 @@ def calculate_restaurant_score(restaurant, filters=None):
                 '$50+': ['$$$$', '$$$$$']
             }
             if price_range in price_mapping:
-                if restaurant.price_range in price_mapping[price_range]:
-                    score += 10
+                if isinstance(restaurant, dict):
+                    # Google Places uses price_level (0-4)
+                    if price_range == '$30 and under' and price_level in [0, 1]:
+                        score += 10
+                    elif price_range == '$31-$50' and price_level == 2:
+                        score += 10
+                    elif price_range == '$50+' and price_level in [3, 4]:
+                        score += 10
+                else:
+                    if restaurant.price_range in price_mapping[price_range]:
+                        score += 10
         
         # Tag match
         if filters.get('tags'):
             tags = filters['tags']
             if isinstance(tags, str):
                 tags = [tags]
-            restaurant_tags = restaurant.raw_data.get('tags', []) if restaurant.raw_data else []
-            restaurant_features = restaurant.features or []
-            for tag in tags:
-                tag_lower = tag.lower()
-                if (any(tag_lower in str(t).lower() for t in restaurant_tags) or
-                    any(tag_lower in str(f).lower() for f in restaurant_features)):
-                    score += 10
-                    break
+            if isinstance(restaurant, dict):
+                for tag in tags:
+                    tag_lower = tag.lower()
+                    if any(tag_lower in str(c).lower() for c in categories):
+                        score += 10
+                        break
+            else:
+                restaurant_tags = restaurant.raw_data.get('tags', []) if restaurant.raw_data else []
+                restaurant_features = restaurant.features or []
+                for tag in tags:
+                    tag_lower = tag.lower()
+                    if (any(tag_lower in str(t).lower() for t in restaurant_tags) or
+                        any(tag_lower in str(f).lower() for f in restaurant_features)):
+                        score += 10
+                        break
     
     return min(100, score)  # Cap at 100
+
+
+def calculate_visit_duration(place, category=None):
+    """
+    Calculate estimated visit duration for a place based on its category.
+    
+    Args:
+        place: Place dict with 'types' or ScrapedRestaurant object with 'categories'
+        category: Optional explicit category override
+    
+    Returns:
+        Duration in minutes
+    """
+    # Get category from place
+    if category:
+        category_lower = category.lower()
+    elif isinstance(place, dict):
+        types = place.get('types', [])
+        category_lower = types[0].lower() if types else ''
+    else:
+        # ScrapedRestaurant object
+        categories = place.categories or []
+        category_lower = categories[0].lower() if categories else ''
+    
+    # Category to duration mapping
+    duration_map = {
+        'restaurant': 90,
+        'food': 90,
+        'meal_takeaway': 30,
+        'cafe': 45,
+        'bakery': 30,
+        'bar': 60,
+        'night_club': 120,
+        'lounge': 60,
+        'museum': 120,
+        'art_gallery': 90,
+        'park': 60,
+        'shopping_mall': 90,
+        'store': 45,
+        'library': 60,
+    }
+    
+    # Check for matches
+    for cat_key, duration in duration_map.items():
+        if cat_key in category_lower:
+            return duration
+    
+    # Default duration
+    return 60
+
+
+def get_time_windows_for_categories(categories=None):
+    """
+    Get time window for a place based on its categories.
+    
+    Args:
+        categories: List of category strings (e.g., ['restaurant', 'food'])
+                   If None, returns the full category mapping dict
+    
+    Returns:
+        If categories provided: (min_start, max_start) tuple in minutes from 00:00
+        If None: (category_windows_dict, time_slot_windows_dict) tuple
+    """
+    # Time windows in minutes from 00:00
+    windows = {
+        'morning': (540, 660),      # 09:00-11:00
+        'mid_day': (660, 840),      # 11:00-14:00
+        'afternoon': (840, 1020),   # 14:00-17:00
+        'evening': (1020, 1200),    # 17:00-20:00
+    }
+    
+    # Map category types to allowed time windows
+    category_windows = {
+        # Morning categories
+        'cafe': [windows['morning'], windows['afternoon']],
+        'bakery': [windows['morning'], windows['afternoon']],
+        'breakfast': [windows['morning']],
+        
+        # Mid-day categories
+        'restaurant': [windows['mid_day'], windows['evening']],
+        'food': [windows['mid_day'], windows['evening']],
+        'meal_takeaway': [windows['mid_day'], windows['evening']],
+        
+        # Afternoon categories
+        'museum': [windows['afternoon']],
+        'art_gallery': [windows['afternoon']],
+        'park': [windows['afternoon']],
+        'shopping_mall': [windows['afternoon']],
+        'store': [windows['afternoon']],
+        
+        # Evening categories
+        'bar': [windows['evening']],
+        'night_club': [windows['evening']],
+        'lounge': [windows['evening']],
+    }
+    
+    # If categories provided, return a single time window tuple
+    if categories:
+        categories_lower = [c.lower() if isinstance(c, str) else str(c).lower() for c in categories]
+        
+        # Find first matching category
+        for cat in categories_lower:
+            for cat_key, windows_list in category_windows.items():
+                if cat_key in cat:
+                    # Return the first (earliest) window
+                    return windows_list[0]
+        
+        # Default to mid_day if no match
+        return windows['mid_day']
+    
+    # Return full mapping if no categories provided
+    return category_windows, windows
 
 
 def ensure_diversity(restaurants, max_same_cuisine=2, max_same_price=3):

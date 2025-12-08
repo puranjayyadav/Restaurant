@@ -469,10 +469,19 @@ def get_personalized_recommendations(request):
 def generate_day_itinerary(request):
     """
     Generate a day itinerary from morning to evening based on user location and selected categories.
-    Ensures all places are within max_distance_km of each other (default 1.5km).
+    Uses OR-Tools optimization if enabled, with seamless fallback to rule-based algorithm.
     """
     import math
     import json
+    import os
+    from django.conf import settings
+    from res_backend.routing_service import RoutingService
+    from res_backend.or_tools_solver import TOPTWSolver
+    from res_backend.utils import (
+        calculate_restaurant_score, 
+        calculate_visit_duration, 
+        get_time_windows_for_categories
+    )
     
     try:
         data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
@@ -481,11 +490,16 @@ def generate_day_itinerary(request):
         latitude = float(data.get('latitude'))
         longitude = float(data.get('longitude'))
         selected_categories = data.get('selected_categories', [])
-        max_distance_km = float(data.get('max_distance_km', 3.0))  # Increased from 1.5 to 3.0 for rural areas
+        max_distance_km = float(data.get('max_distance_km', 1.0))  # Default 1 km between places
         places_data = data.get('places', [])  # Places fetched from Google API by Flutter
         vegetarian_filter = data.get('vegetarian_filter', False)  # Vegetarian filter option
         
+        # Feature flag: Use OR-Tools optimizer if enabled
+        USE_OR_TOOLS_OPTIMIZER = os.getenv('USE_OR_TOOLS_OPTIMIZER', 'false').lower() == 'true'
+        USE_OR_TOOLS_OPTIMIZER = getattr(settings, 'USE_OR_TOOLS_OPTIMIZER', USE_OR_TOOLS_OPTIMIZER)
+        
         print(f"DEBUG: Using max distance: {max_distance_km}km between places")
+        print(f"DEBUG: OR-Tools optimizer enabled: {USE_OR_TOOLS_OPTIMIZER}")
         
         if not places_data:
             return Response(
@@ -493,245 +507,29 @@ def generate_day_itinerary(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Category to Google Places type mapping
-        category_to_types = {
-            'restaurants': ['restaurant', 'food', 'meal_takeaway'],
-            'cafes': ['cafe', 'bakery'],
-            'museums': ['museum', 'art_gallery'],
-            'parks': ['park'],
-            'shopping': ['shopping_mall', 'store'],
-            'bars': ['bar', 'night_club', 'lounge'],
-            'dessert': ['bakery', 'cafe']
-        }
+        # Try OR-Tools path first (if enabled)
+        if USE_OR_TOOLS_OPTIMIZER:
+            try:
+                result = _generate_with_or_tools(
+                    places_data, latitude, longitude, selected_categories,
+                    max_distance_km, vegetarian_filter, user_id
+                )
+                if result:
+                    result['metadata'] = {'algorithm': 'or_tools'}
+                    return Response(result, status=status.HTTP_200_OK)
+                else:
+                    print("DEBUG: OR-Tools returned no solution, falling back to rule-based")
+            except Exception as e:
+                import traceback
+                print(f"DEBUG: OR-Tools failed: {str(e)}")
+                print(f"DEBUG: {traceback.format_exc()}")
+                print("DEBUG: Falling back to rule-based algorithm")
         
-        # Build allowed types from selected categories
-        allowed_types_set = set()
-        for category in selected_categories:
-            if category.lower() in category_to_types:
-                allowed_types_set.update(category_to_types[category.lower()])
-        
-        # Dynamically build time slots based on selected categories
-        time_slots = []
-        
-        # Morning slot - prioritize cafes, bakeries, breakfast places
-        morning_types = []
-        if any(cat.lower() in ['cafes', 'dessert'] for cat in selected_categories):
-            morning_types.extend(['cafe', 'bakery'])
-        if any(cat.lower() == 'restaurants' for cat in selected_categories):
-            morning_types.extend(['breakfast', 'restaurant'])  # Breakfast restaurants
-        if morning_types:
-            time_slots.append({
-                'name': 'morning',
-                'start_time': '09:00',
-                'end_time': '11:00',
-                'allowed_types': morning_types,
-                'max_places': 2
-            })
-        
-        # Mid-day slot - prioritize restaurants
-        midday_types = []
-        if any(cat.lower() == 'restaurants' for cat in selected_categories):
-            midday_types.extend(['restaurant', 'food', 'meal_takeaway'])
-        if any(cat.lower() == 'cafes' for cat in selected_categories):
-            midday_types.extend(['cafe'])
-        if midday_types:
-            time_slots.append({
-                'name': 'mid_day',
-                'start_time': '11:00',
-                'end_time': '14:00',
-                'allowed_types': midday_types,
-                'max_places': 2
-            })
-        
-        # Afternoon slot - prioritize museums, parks, cafes (only if selected)
-        afternoon_types = []
-        if any(cat.lower() == 'museums' for cat in selected_categories):
-            afternoon_types.extend(['museum', 'art_gallery', 'library'])
-        if any(cat.lower() == 'parks' for cat in selected_categories):
-            afternoon_types.append('park')
-        if any(cat.lower() == 'cafes' for cat in selected_categories):
-            afternoon_types.append('cafe')
-        if any(cat.lower() == 'shopping' for cat in selected_categories):
-            afternoon_types.extend(['shopping_mall', 'store'])
-        # If no specific afternoon categories, allow restaurants/cafes
-        if not afternoon_types:
-            if any(cat.lower() == 'restaurants' for cat in selected_categories):
-                afternoon_types.extend(['restaurant', 'cafe'])
-            elif any(cat.lower() == 'cafes' for cat in selected_categories):
-                afternoon_types.append('cafe')
-        if afternoon_types:
-            time_slots.append({
-                'name': 'afternoon',
-                'start_time': '14:00',
-                'end_time': '17:00',
-                'allowed_types': afternoon_types,
-                'max_places': 2
-            })
-        
-        # Evening slot - prioritize restaurants and bars
-        evening_types = []
-        if any(cat.lower() == 'restaurants' for cat in selected_categories):
-            evening_types.extend(['restaurant', 'food'])
-        if any(cat.lower() == 'bars' for cat in selected_categories):
-            evening_types.extend(['bar', 'night_club', 'lounge'])
-        if any(cat.lower() == 'dessert' for cat in selected_categories):
-            evening_types.extend(['bakery', 'cafe'])
-        if evening_types:
-            time_slots.append({
-                'name': 'evening',
-                'start_time': '17:00',
-                'end_time': '20:00',
-                'allowed_types': evening_types,
-                'max_places': 2
-            })
-        
-        # If no time slots were created (shouldn't happen, but safety check)
-        if not time_slots:
-            # Fallback: create a single slot with all selected types
-            fallback_types = list(allowed_types_set)
-            if fallback_types:
-                time_slots.append({
-                    'name': 'all_day',
-                    'start_time': '09:00',
-                    'end_time': '20:00',
-                    'allowed_types': fallback_types,
-                    'max_places': 4
-                })
-        
-        print(f"DEBUG: Selected categories: {selected_categories}")
-        print(f"DEBUG: Created {len(time_slots)} time slots based on selected categories:")
-        for slot in time_slots:
-            print(f"  - {slot['name']}: {slot['allowed_types']}")
-        
-        # Filter places by selected categories (using allowed_types_set built above)
-        filtered_places = []
-        if selected_categories and allowed_types_set:
-            for place in places_data:
-                place_types = [t.lower() for t in place.get('types', [])]
-                if any(t in allowed_types_set for t in place_types):
-                    filtered_places.append(place)
-        else:
-            filtered_places = places_data
-        
-        # Apply vegetarian filter if enabled
-        if vegetarian_filter:
-            vegetarian_keywords = ['vegetarian', 'vegan', 'plant-based', 'veggie']
-            vegetarian_filtered = []
-            for place in filtered_places:
-                # Check place name, description, or tags for vegetarian keywords
-                place_name = place.get('name', '').lower()
-                place_description = place.get('description', '').lower()
-                place_tags = [tag.lower() for tag in place.get('tags', [])]
-                place_types = [t.lower() for t in place.get('types', [])]
-                
-                # Combine all text fields to search
-                all_text = ' '.join([place_name, place_description] + place_tags + place_types)
-                
-                # Check if any vegetarian keyword is present
-                if any(keyword in all_text for keyword in vegetarian_keywords):
-                    vegetarian_filtered.append(place)
-            
-            filtered_places = vegetarian_filtered
-            print(f"DEBUG: After vegetarian filter: {len(filtered_places)} places remaining")
-        
-        # Haversine distance calculation
-        def calculate_distance(lat1, lon1, lat2, lon2):
-            R = 6371  # Earth radius in km
-            lat1_rad = math.radians(lat1)
-            lat2_rad = math.radians(lat2)
-            delta_lat = math.radians(lat2 - lat1)
-            delta_lon = math.radians(lon2 - lon1)
-            
-            a = (math.sin(delta_lat / 2) ** 2 +
-                 math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
-            c = 2 * math.asin(math.sqrt(a))
-            return R * c
-        
-        # Get place coordinates
-        def get_place_coords(place):
-            geometry = place.get('geometry', {})
-            location = geometry.get('location', {})
-            return (location.get('lat'), location.get('lng'))
-        
-        # Generate itinerary
-        itinerary = []
-        last_location = (latitude, longitude)
-        used_place_ids = set()
-        
-        for slot in time_slots:
-            slot_places = []
-            
-            # Find places matching this slot's types
-            for place in filtered_places:
-                place_id = place.get('place_id') or place.get('id')
-                if place_id in used_place_ids:
-                    continue
-                
-                place_types = [t.lower() for t in place.get('types', [])]
-                if any(t in slot['allowed_types'] for t in place_types):
-                    coords = get_place_coords(place)
-                    if coords[0] and coords[1]:
-                        distance = calculate_distance(
-                            last_location[0], last_location[1],
-                            coords[0], coords[1]
-                        )
-                        # For first slot, allow larger radius to find initial places
-                        max_dist = max_distance_km * 2 if slot == time_slots[0] else max_distance_km
-                        if distance <= max_dist:
-                            slot_places.append({
-                                'place': place,
-                                'distance': distance,
-                                'coords': coords
-                            })
-            
-            # Add variety: shuffle places within distance tiers for randomization
-            # Tier 1: Very close (0-500m) - highest priority
-            # Tier 2: Walkable (500m-1km) - medium priority  
-            # Tier 3: Further (1km-1.5km) - lower priority
-            import random
-            
-            tier1 = [p for p in slot_places if p['distance'] <= 0.5]
-            tier2 = [p for p in slot_places if 0.5 < p['distance'] <= 1.0]
-            tier3 = [p for p in slot_places if 1.0 < p['distance'] <= max_distance_km]
-            
-            # Shuffle within each tier for variety
-            random.shuffle(tier1)
-            random.shuffle(tier2)
-            random.shuffle(tier3)
-            
-            # Combine tiers with preference for closer places
-            sorted_places = tier1 + tier2 + tier3
-            selected = sorted_places[:slot['max_places']]
-            
-            for item in selected:
-                place = item['place']
-                place_id = place.get('place_id') or place.get('id')
-                used_place_ids.add(place_id)
-                
-                distance_km = item['distance']
-                walk_time_minutes = int((distance_km / 5.0) * 60)  # 5 km/h walking speed
-                
-                itinerary_item = {
-                    'slot_name': slot['name'],
-                    'start_time': slot['start_time'],
-                    'place_name': place.get('name', 'Unknown'),
-                    'place_id': place_id,
-                    'latitude': item['coords'][0],
-                    'longitude': item['coords'][1],
-                    'address': place.get('vicinity', place.get('formatted_address', 'Address not available')),
-                    'distance_from_previous': round(distance_km, 2),
-                    'estimated_walk_time': walk_time_minutes,
-                    'types': place.get('types', []),
-                    'photos': place.get('photos', [])  # Include photos
-                }
-                itinerary.append(itinerary_item)
-                last_location = item['coords']
-        
-        return Response({
-            'itinerary': itinerary,
-            'total_items': len(itinerary),
-            'neighborhood': 'Local Area'  # Could be extracted from address
-        }, status=status.HTTP_200_OK)
+        # Fallback to rule-based algorithm (existing logic)
+        return _generate_rule_based_itinerary(
+            places_data, latitude, longitude, selected_categories,
+            max_distance_km, vegetarian_filter
+        )
         
     except Exception as e:
         import traceback
@@ -741,6 +539,548 @@ def generate_day_itinerary(request):
             {"error": f"Failed to generate itinerary: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+def _generate_with_or_tools(places_data, latitude, longitude, selected_categories,
+                           max_distance_km, vegetarian_filter, user_id):
+    """
+    Generate itinerary using OR-Tools optimization.
+    
+    Returns:
+        Dict with itinerary data, or None if solver fails
+    """
+    from res_backend.routing_service import RoutingService
+    from res_backend.or_tools_solver import TOPTWSolver
+    from res_backend.utils import (
+        calculate_restaurant_score, 
+        calculate_visit_duration, 
+        get_time_windows_for_categories
+    )
+    import math
+    
+    # Filter places by selected categories
+    category_to_types = {
+        'restaurants': ['restaurant', 'food', 'meal_takeaway'],
+        'cafes': ['cafe', 'bakery'],
+        'museums': ['museum', 'art_gallery'],
+        'parks': ['park'],
+        'shopping': ['shopping_mall', 'store'],
+        'bars': ['bar', 'night_club', 'lounge'],
+        'dessert': ['bakery', 'cafe']
+    }
+    
+    allowed_types_set = set()
+    for category in selected_categories:
+        if category.lower() in category_to_types:
+            allowed_types_set.update(category_to_types[category.lower()])
+    
+    filtered_places = []
+    for place in places_data:
+        place_types = [t.lower() for t in place.get('types', [])]
+        if any(t in allowed_types_set for t in place_types):
+            filtered_places.append(place)
+    
+    if not filtered_places:
+        return None
+    
+    # Apply vegetarian filter if enabled
+    if vegetarian_filter:
+        vegetarian_keywords = ['vegetarian', 'vegan', 'plant-based', 'veggie']
+        vegetarian_filtered = []
+        for place in filtered_places:
+            place_name = place.get('name', '').lower()
+            place_description = place.get('description', '').lower()
+            place_tags = [tag.lower() for tag in place.get('tags', [])]
+            place_types = [t.lower() for t in place.get('types', [])]
+            all_text = ' '.join([place_name, place_description] + place_tags + place_types)
+            if any(keyword in all_text for keyword in vegetarian_keywords):
+                vegetarian_filtered.append(place)
+        filtered_places = vegetarian_filtered
+    
+    if not filtered_places:
+        return None
+    
+    # CRITICAL: Filter places by max_distance_km from start location
+    # This ensures hyper-local itineraries
+    from res_backend.utils import haversine_distance
+    start_location = (latitude, longitude)
+    local_places = []
+    distances_filtered = []
+    
+    for place in filtered_places:
+        geometry = place.get('geometry', {})
+        location = geometry.get('location', {})
+        place_lat = location.get('lat')
+        place_lng = location.get('lng')
+        
+        if place_lat and place_lng:
+            # Calculate distance from start location
+            distance_m = haversine_distance(latitude, longitude, place_lat, place_lng)
+            distance_km = distance_m / 1000.0
+            
+            # Only include places within max_distance_km radius
+            if distance_km <= max_distance_km:
+                local_places.append(place)
+            else:
+                distances_filtered.append((place.get('name', 'Unknown'), distance_km))
+    
+    print(f"DEBUG: After distance filter ({max_distance_km}km): {len(local_places)} places remaining")
+    if distances_filtered:
+        print(f"DEBUG: Filtered out {len(distances_filtered)} places beyond {max_distance_km}km")
+        # Show a few examples of filtered places
+        for name, dist in distances_filtered[:3]:
+            print(f"DEBUG:   - {name}: {dist:.2f}km away")
+    
+    if not local_places:
+        print(f"DEBUG: No places within {max_distance_km}km of start location")
+        return None
+    
+    # Pre-process places: calculate scores, durations, time windows
+    places = []
+    scores = []
+    durations = []
+    time_windows = []
+    
+    for place in local_places:
+        # Calculate utility score
+        score = calculate_restaurant_score(place, filters=None, user_preferences=None)
+        scores.append(score)
+        
+        # Calculate visit duration (function accepts place object)
+        place_types = place.get('types', [])
+        duration = calculate_visit_duration(place=place)
+        durations.append(duration)
+        
+        # Get time window based on place categories
+        time_window = get_time_windows_for_categories(place_types)
+        time_windows.append(time_window)
+        places.append(place)
+    
+    # Build travel time matrix (cost-protected)
+    routing_service = RoutingService()
+    start_location = (latitude, longitude)
+    
+    try:
+        time_matrix, original_indices = routing_service.get_travel_time_matrix(
+            places, start_location, mode='walking', max_candidates=25, max_distance_km=max_distance_km
+        )
+    except Exception as e:
+        print(f"DEBUG: Routing service failed: {e}")
+        return None
+    
+    # Set up constraints
+    category_constraints = {
+        'restaurant': 2,
+        'food': 2,
+        'cafe': 2,
+        'museum': 1,
+        'park': 1,
+        'bar': 1,
+    }
+    
+    # Solve with OR-Tools
+    solver = TOPTWSolver()
+    result = solver.solve_itinerary(
+        places=places,
+        time_matrix=time_matrix,
+        scores=scores,
+        durations=durations,
+        time_windows=time_windows,
+        category_constraints=category_constraints,
+        start_location=start_location,
+        time_budget=540,  # 9 hours
+        slack_minutes=30,
+        require_lunch=False,
+        max_places=10,  # Limit to 8-10 places
+        max_distance_km=max_distance_km  # Enforce hyper-local constraint
+    )
+    
+    if not result:
+        return None
+    
+    # Format output to match existing API response
+    itinerary = []
+    previous_idx = 0  # Start location is index 0 in time_matrix
+    
+    for i, route_item in enumerate(result['route']):
+        place_idx = route_item['place_index']
+        if place_idx < len(places):
+            place = places[place_idx]
+            
+            # Convert arrival time (minutes from 00:00) to time string
+            arrival_min = route_item['arrival_time']
+            hours = arrival_min // 60
+            minutes = arrival_min % 60
+            time_str = f"{hours:02d}:{minutes:02d}"
+            
+            geometry = place.get('geometry', {})
+            location = geometry.get('location', {})
+            
+            # Calculate distance from previous place using time matrix
+            # Convert travel time (minutes) to distance (km) assuming 5 km/h walking speed
+            travel_time_min = 0
+            if i == 0:
+                # First place: travel time from start location (index 0) to first place
+                # In time_matrix: start is 0, first place is 1, second is 2, etc.
+                curr_matrix_idx = place_idx + 1
+                if curr_matrix_idx < len(time_matrix) and curr_matrix_idx < len(time_matrix[0]):
+                    travel_time_min = time_matrix[0][curr_matrix_idx]
+            else:
+                # Get travel time from previous place to current place
+                # Previous place index in matrix: previous_idx + 1 (after start)
+                # Current place index in matrix: place_idx + 1 (after start)
+                prev_matrix_idx = previous_idx + 1
+                curr_matrix_idx = place_idx + 1
+                if (prev_matrix_idx < len(time_matrix) and 
+                    curr_matrix_idx < len(time_matrix) and
+                    curr_matrix_idx < len(time_matrix[prev_matrix_idx])):
+                    travel_time_min = time_matrix[prev_matrix_idx][curr_matrix_idx]
+            
+            # Convert travel time to distance (5 km/h = 0.0833 km/min)
+            distance_km = (travel_time_min * 0.0833) if travel_time_min > 0 else 0.0
+            
+            # Validate and recalculate distance using Haversine for accuracy
+            # This ensures we have accurate distances between consecutive places
+            from res_backend.utils import haversine_distance
+            if i == 0:
+                # Distance from start to first place
+                start_lat, start_lng = start_location
+                place_lat = location.get('lat')
+                place_lng = location.get('lng')
+                if place_lat and place_lng:
+                    distance_m = haversine_distance(start_lat, start_lng, place_lat, place_lng)
+                    distance_km = distance_m / 1000.0
+            else:
+                # Distance from previous place to current place
+                prev_place = places[previous_idx]
+                prev_geometry = prev_place.get('geometry', {})
+                prev_location = prev_geometry.get('location', {})
+                prev_lat = prev_location.get('lat')
+                prev_lng = prev_location.get('lng')
+                place_lat = location.get('lat')
+                place_lng = location.get('lng')
+                if prev_lat and prev_lng and place_lat and place_lng:
+                    distance_m = haversine_distance(prev_lat, prev_lng, place_lat, place_lng)
+                    distance_km = distance_m / 1000.0
+                    
+                    # Warn if distance exceeds max (shouldn't happen with proper constraints)
+                    if distance_km > max_distance_km:
+                        print(f"DEBUG: WARNING - Distance between places exceeds max: {distance_km:.2f}km > {max_distance_km}km")
+            
+            walk_time_minutes = int(travel_time_min) if travel_time_min > 0 else 0
+            
+            # Map time to slot name for Flutter compatibility
+            # Flutter expects: 'morning', 'mid_day', 'afternoon', 'evening', or 'custom'
+            slot_name = 'custom'
+            if 540 <= arrival_min < 660:  # 09:00-11:00
+                slot_name = 'morning'
+            elif 660 <= arrival_min < 840:  # 11:00-14:00
+                slot_name = 'mid_day'
+            elif 840 <= arrival_min < 1020:  # 14:00-17:00
+                slot_name = 'afternoon'
+            elif 1020 <= arrival_min < 1200:  # 17:00-20:00
+                slot_name = 'evening'
+            
+            # Ensure all fields are properly typed and not None
+            place_name = place.get('name') or 'Unknown'
+            place_id = place.get('place_id') or place.get('id') or ''
+            lat = location.get('lat')
+            lng = location.get('lng')
+            address = place.get('vicinity') or place.get('formatted_address') or 'Address not available'
+            types_list = place.get('types') or []
+            photos_list = place.get('photos') or []
+            
+            # Ensure types and photos are lists
+            if not isinstance(types_list, list):
+                types_list = []
+            if not isinstance(photos_list, list):
+                photos_list = []
+            
+            itinerary_item = {
+                'slot_name': slot_name,
+                'start_time': time_str,
+                'place_name': str(place_name),
+                'place_id': str(place_id) if place_id else '',
+                'latitude': float(lat) if lat is not None else None,
+                'longitude': float(lng) if lng is not None else None,
+                'address': str(address),
+                'distance_from_previous': round(distance_km, 2),
+                'estimated_walk_time': walk_time_minutes,
+                'types': types_list,
+                'photos': photos_list,
+            }
+            itinerary.append(itinerary_item)
+            previous_idx = place_idx
+    
+    return {
+        'itinerary': itinerary,
+        'total_items': len(itinerary),
+        'neighborhood': 'Local Area',
+        'total_score': result['total_score'],
+        'total_time': result['total_time'],
+    }
+
+
+def _generate_rule_based_itinerary(places_data, latitude, longitude, selected_categories,
+                                   max_distance_km, vegetarian_filter):
+    """
+    Original rule-based itinerary generation algorithm (ghost fallback).
+    This is the proven, reliable algorithm that always works.
+    """
+    import math
+    import random
+    
+    # Category to Google Places type mapping
+    category_to_types = {
+        'restaurants': ['restaurant', 'food', 'meal_takeaway'],
+        'cafes': ['cafe', 'bakery'],
+        'museums': ['museum', 'art_gallery'],
+        'parks': ['park'],
+        'shopping': ['shopping_mall', 'store'],
+        'bars': ['bar', 'night_club', 'lounge'],
+        'dessert': ['bakery', 'cafe']
+    }
+    
+    # Build allowed types from selected categories
+    allowed_types_set = set()
+    for category in selected_categories:
+        if category.lower() in category_to_types:
+            allowed_types_set.update(category_to_types[category.lower()])
+    
+    # Dynamically build time slots based on selected categories
+    time_slots = []
+    
+    # Morning slot - prioritize cafes, bakeries, breakfast places
+    morning_types = []
+    if any(cat.lower() in ['cafes', 'dessert'] for cat in selected_categories):
+        morning_types.extend(['cafe', 'bakery'])
+    if any(cat.lower() == 'restaurants' for cat in selected_categories):
+        morning_types.extend(['breakfast', 'restaurant'])  # Breakfast restaurants
+    if morning_types:
+        time_slots.append({
+            'name': 'morning',
+            'start_time': '09:00',
+            'end_time': '11:00',
+            'allowed_types': morning_types,
+            'max_places': 2
+        })
+    
+    # Mid-day slot - prioritize restaurants
+    midday_types = []
+    if any(cat.lower() == 'restaurants' for cat in selected_categories):
+        midday_types.extend(['restaurant', 'food', 'meal_takeaway'])
+    if any(cat.lower() == 'cafes' for cat in selected_categories):
+        midday_types.extend(['cafe'])
+    if midday_types:
+        time_slots.append({
+            'name': 'mid_day',
+            'start_time': '11:00',
+            'end_time': '14:00',
+            'allowed_types': midday_types,
+            'max_places': 2
+        })
+    
+    # Afternoon slot - prioritize museums, parks, cafes (only if selected)
+    afternoon_types = []
+    if any(cat.lower() == 'museums' for cat in selected_categories):
+        afternoon_types.extend(['museum', 'art_gallery', 'library'])
+    if any(cat.lower() == 'parks' for cat in selected_categories):
+        afternoon_types.append('park')
+    if any(cat.lower() == 'cafes' for cat in selected_categories):
+        afternoon_types.append('cafe')
+    if any(cat.lower() == 'shopping' for cat in selected_categories):
+        afternoon_types.extend(['shopping_mall', 'store'])
+    # If no specific afternoon categories, allow restaurants/cafes
+    if not afternoon_types:
+        if any(cat.lower() == 'restaurants' for cat in selected_categories):
+            afternoon_types.extend(['restaurant', 'cafe'])
+        elif any(cat.lower() == 'cafes' for cat in selected_categories):
+            afternoon_types.append('cafe')
+    if afternoon_types:
+        time_slots.append({
+            'name': 'afternoon',
+            'start_time': '14:00',
+            'end_time': '17:00',
+            'allowed_types': afternoon_types,
+            'max_places': 2
+        })
+    
+    # Evening slot - prioritize restaurants and bars
+    evening_types = []
+    if any(cat.lower() == 'restaurants' for cat in selected_categories):
+        evening_types.extend(['restaurant', 'food'])
+    if any(cat.lower() == 'bars' for cat in selected_categories):
+        evening_types.extend(['bar', 'night_club', 'lounge'])
+    if any(cat.lower() == 'dessert' for cat in selected_categories):
+        evening_types.extend(['bakery', 'cafe'])
+    if evening_types:
+        time_slots.append({
+            'name': 'evening',
+            'start_time': '17:00',
+            'end_time': '20:00',
+            'allowed_types': evening_types,
+            'max_places': 2
+        })
+    
+    # If no time slots were created (shouldn't happen, but safety check)
+    if not time_slots:
+        # Fallback: create a single slot with all selected types
+        fallback_types = list(allowed_types_set)
+        if fallback_types:
+            time_slots.append({
+                'name': 'all_day',
+                'start_time': '09:00',
+                'end_time': '20:00',
+                'allowed_types': fallback_types,
+                'max_places': 4
+            })
+    
+    print(f"DEBUG: Selected categories: {selected_categories}")
+    print(f"DEBUG: Created {len(time_slots)} time slots based on selected categories:")
+    for slot in time_slots:
+        print(f"  - {slot['name']}: {slot['allowed_types']}")
+    
+    print(f"DEBUG: Total places received: {len(places_data)}")
+    
+    # Filter places by selected categories (using allowed_types_set built above)
+    filtered_places = []
+    if selected_categories and allowed_types_set:
+        for place in places_data:
+            place_types = [t.lower() for t in place.get('types', [])]
+            if any(t in allowed_types_set for t in place_types):
+                filtered_places.append(place)
+    else:
+        filtered_places = places_data
+    
+    print(f"DEBUG: Places after category filter: {len(filtered_places)}")
+    
+    # Apply vegetarian filter if enabled
+    if vegetarian_filter:
+        vegetarian_keywords = ['vegetarian', 'vegan', 'plant-based', 'veggie']
+        vegetarian_filtered = []
+        for place in filtered_places:
+            # Check place name, description, or tags for vegetarian keywords
+            place_name = place.get('name', '').lower()
+            place_description = place.get('description', '').lower()
+            place_tags = [tag.lower() for tag in place.get('tags', [])]
+            place_types = [t.lower() for t in place.get('types', [])]
+            
+            # Combine all text fields to search
+            all_text = ' '.join([place_name, place_description] + place_tags + place_types)
+            
+            # Check if any vegetarian keyword is present
+            if any(keyword in all_text for keyword in vegetarian_keywords):
+                vegetarian_filtered.append(place)
+        
+        filtered_places = vegetarian_filtered
+        print(f"DEBUG: After vegetarian filter: {len(filtered_places)} places remaining")
+    
+    # Haversine distance calculation
+    def calculate_distance(lat1, lon1, lat2, lon2):
+        R = 6371  # Earth radius in km
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(delta_lat / 2) ** 2 +
+             math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+        c = 2 * math.asin(math.sqrt(a))
+        return R * c
+    
+    # Get place coordinates
+    def get_place_coords(place):
+        geometry = place.get('geometry', {})
+        location = geometry.get('location', {})
+        return (location.get('lat'), location.get('lng'))
+    
+    # Generate itinerary
+    itinerary = []
+    last_location = (latitude, longitude)
+    used_place_ids = set()
+    
+    for slot in time_slots:
+        slot_places = []
+        
+        # Find places matching this slot's types
+        for place in filtered_places:
+            place_id = place.get('place_id') or place.get('id')
+            if place_id in used_place_ids:
+                continue
+            
+            place_types = [t.lower() for t in place.get('types', [])]
+            if any(t in slot['allowed_types'] for t in place_types):
+                coords = get_place_coords(place)
+                if coords[0] and coords[1]:
+                    distance = calculate_distance(
+                        last_location[0], last_location[1],
+                        coords[0], coords[1]
+                    )
+                    # For first slot, allow larger radius to find initial places
+                    max_dist = max_distance_km * 2 if slot == time_slots[0] else max_distance_km
+                    if distance <= max_dist:
+                        slot_places.append({
+                            'place': place,
+                            'distance': distance,
+                            'coords': coords
+                        })
+        
+        print(f"DEBUG: Slot '{slot['name']}': Found {len(slot_places)} places within {max_dist if slot == time_slots[0] else max_distance_km}km")
+        
+        # Add variety: shuffle places within distance tiers for randomization
+        # Tier 1: Very close (0-500m) - highest priority
+        # Tier 2: Walkable (500m-1km) - medium priority  
+        # Tier 3: Further (1km-1.5km) - lower priority
+        
+        tier1 = [p for p in slot_places if p['distance'] <= 0.5]
+        tier2 = [p for p in slot_places if 0.5 < p['distance'] <= 1.0]
+        tier3 = [p for p in slot_places if 1.0 < p['distance'] <= max_distance_km]
+        
+        # Shuffle within each tier for variety
+        random.shuffle(tier1)
+        random.shuffle(tier2)
+        random.shuffle(tier3)
+        
+        # Combine tiers with preference for closer places
+        sorted_places = tier1 + tier2 + tier3
+        selected = sorted_places[:slot['max_places']]
+        
+        for item in selected:
+            place = item['place']
+            place_id = place.get('place_id') or place.get('id')
+            used_place_ids.add(place_id)
+            
+            distance_km = item['distance']
+            walk_time_minutes = int((distance_km / 5.0) * 60)  # 5 km/h walking speed
+            
+            itinerary_item = {
+                'slot_name': slot['name'],
+                'start_time': slot['start_time'],
+                'place_name': place.get('name', 'Unknown'),
+                'place_id': place_id,
+                'latitude': item['coords'][0],
+                'longitude': item['coords'][1],
+                'address': place.get('vicinity', place.get('formatted_address', 'Address not available')),
+                'distance_from_previous': round(distance_km, 2),
+                'estimated_walk_time': walk_time_minutes,
+                'types': place.get('types', []),
+                'photos': place.get('photos', [])  # Include photos
+            }
+            itinerary.append(itinerary_item)
+            last_location = item['coords']
+    
+    print(f"DEBUG: Generated itinerary with {len(itinerary)} items")
+    if len(itinerary) == 0:
+        print("DEBUG: WARNING - Empty itinerary generated!")
+        print(f"DEBUG: Filtered places count: {len(filtered_places)}")
+        print(f"DEBUG: Time slots count: {len(time_slots)}")
+    
+    return Response({
+        'itinerary': itinerary,
+        'total_items': len(itinerary),
+        'neighborhood': 'Local Area',  # Could be extracted from address
+        'metadata': {'algorithm': 'rule_based'}
+    }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @permission_classes([])
@@ -2095,8 +2435,8 @@ def pre_create_itineraries(request):
         # Popular combinations to pre-create
         combinations = [
             {
-                'title': 'Italian Food Tour in East Village',
-                'description': 'Discover authentic Italian restaurants and neighborhood gems',
+                'title': 'La Dolce Vita: East Village Italian Journey',
+                'description': 'Discover authentic Italian trattorias and hidden neighborhood gems where traditional recipes meet East Village charm.',
                 'cuisine': 'Italian',
                 'price_range': '$30 and under',
                 'tags': ['Neighborhood gem'],
@@ -2105,8 +2445,8 @@ def pre_create_itineraries(request):
                 'is_featured': True,
             },
             {
-                'title': 'Charming French Dining in TriBeCa',
-                'description': 'Elegant French restaurants perfect for a special evening',
+                'title': 'Parisian Elegance in TriBeCa',
+                'description': 'Experience the sophisticated allure of French dining in TriBeCa\'s elegant restaurants, where classic techniques meet modern innovation.',
                 'cuisine': 'French',
                 'price_range': '$31-$50',
                 'tags': ['Charming'],
@@ -2115,8 +2455,8 @@ def pre_create_itineraries(request):
                 'is_featured': True,
             },
             {
-                'title': 'Mexican Fiesta in West Village',
-                'description': 'Vibrant Mexican spots great for groups',
+                'title': 'West Village Fiesta',
+                'description': 'Savor vibrant Mexican flavors in the heart of the West Village, where festive cantinas and authentic taquerias create unforgettable group dining experiences.',
                 'cuisine': 'Mexican',
                 'price_range': '$30 and under',
                 'tags': ['Good for groups'],
@@ -2125,8 +2465,8 @@ def pre_create_itineraries(request):
                 'is_featured': True,
             },
             {
-                'title': 'Upscale Japanese Dining in Lower East Side',
-                'description': 'Fine Japanese restaurants for special occasions',
+                'title': 'Omakase Experience: Lower East Side',
+                'description': 'Discover exceptional Japanese dining in the Lower East Side, where omakase experiences and innovative izakayas redefine fine dining.',
                 'cuisine': 'Japanese',
                 'price_range': '$50+',
                 'tags': ['Good for special occasions'],
@@ -2135,8 +2475,8 @@ def pre_create_itineraries(request):
                 'is_featured': True,
             },
             {
-                'title': 'Brunch Spots in SoHo',
-                'description': 'Contemporary American brunch favorites',
+                'title': 'SoHo Brunch Scene',
+                'description': 'Start your weekend right with SoHo\'s most celebrated brunch spots, where innovative American cuisine meets the neighborhood\'s artistic energy.',
                 'cuisine': 'Contemporary American',
                 'price_range': '$31-$50',
                 'tags': ['Great for brunch'],
@@ -2229,14 +2569,29 @@ def get_featured_itineraries(request):
     - limit: Number of itineraries to return (default: 8)
     - include_all: If true, also return non-featured itineraries (default: false)
     """
+    print(f"DEBUG: get_featured_itineraries() called")
+    print(f"DEBUG: Request method: {request.method}")
+    print(f"DEBUG: Request path: {request.path}")
+    print(f"DEBUG: Request GET params: {request.GET}")
+    print(f"DEBUG: Request META REMOTE_ADDR: {request.META.get('REMOTE_ADDR', 'N/A')}")
+    print(f"DEBUG: Request META HTTP_HOST: {request.META.get('HTTP_HOST', 'N/A')}")
     try:
         limit = int(request.GET.get('limit', 8))
         include_all = request.GET.get('include_all', 'false').lower() == 'true'
+        
+        # Count total featured itineraries in database
+        total_featured_count = PreCreatedItinerary.objects.filter(
+            is_featured=True
+        ).count()
+        print(f"DEBUG: Total featured itineraries in database: {total_featured_count}")
+        print(f"DEBUG: Requested limit: {limit}")
         
         # Get featured itineraries
         featured = PreCreatedItinerary.objects.filter(
             is_featured=True
         ).order_by('-created_at')[:limit]
+        
+        print(f"DEBUG: Returning {len(featured)} featured itineraries")
         
         results = []
         for itinerary in featured:

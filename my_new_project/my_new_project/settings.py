@@ -28,6 +28,12 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
+# Feature Flags
+# Set to True to enable OR-Tools optimizer for itinerary generation
+# When enabled, uses mathematical optimization instead of rule-based filtering
+# Falls back to rule-based algorithm if OR-Tools fails
+USE_OR_TOOLS_OPTIMIZER = True  # Set to True to enable OR-Tools optimization
+
 
 # Application definition
 
@@ -67,6 +73,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'res_backend.middleware.RequestLoggingMiddleware',  # Add request logging
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',

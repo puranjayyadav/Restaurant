@@ -1,0 +1,17 @@
+{
+  "type": "module",
+  "name": "google-maps-scraper-test",
+  "version": "1.0.0",
+  "description": "Test Google Maps scraper",
+  "main": "googleMaps.js",
+  "scripts": {
+    "test": "node googleMaps.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "axios": "^1.6.0",
+    "graceful-fs": "^4.2.11",
+    "dotenv": "^16.3.1"
+  }
+}
+

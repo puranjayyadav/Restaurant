@@ -31,6 +31,33 @@ jobs:
           sudo apt-get install -y chromium-browser chromium-chromedriver
           sudo ln -s /usr/bin/chromium-browser /usr/bin/chromium || true
       
+      - name: Verify ChromeDriver
+        run: |
+          echo "Testing ChromeDriver installation..."
+          chromium-browser --version || echo "Chromium version check failed"
+          chromedriver --version || echo "ChromeDriver version check failed"
+          echo "Testing Selenium WebDriver..."
+          python -c "
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          opts = Options()
+          opts.add_argument('--headless')
+          opts.add_argument('--no-sandbox')
+          opts.add_argument('--disable-dev-shm-usage')
+          opts.binary_location = '/usr/bin/chromium-browser'
+          try:
+              d = webdriver.Chrome(options=opts)
+              d.set_page_load_timeout(10)
+              d.get('https://www.google.com')
+              print('✓ ChromeDriver test successful!')
+              d.quit()
+          except Exception as e:
+              print(f'✗ ChromeDriver test failed: {e}')
+              import traceback
+              traceback.print_exc()
+              exit(1)
+          "
+      
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -44,7 +71,8 @@ jobs:
         run: |
           # Process first 20 URLs per run to avoid timeout (GitHub Actions has time limits)
           # The script will generate ~400+ URLs, but we'll process them in batches
-          python scout_lemon8.py 20
+          # Use -u flag for unbuffered output and tee to capture logs
+          python -u scout_lemon8.py 20 2>&1 | tee scout_output.log
       
       - name: Upload logs
         if: always()

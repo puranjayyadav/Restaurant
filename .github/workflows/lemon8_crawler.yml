@@ -6,6 +6,8 @@ on:
     - cron: '0 */6 * * *'
     # Run Miner every 2 hours to process queue
     - cron: '0 */2 * * *'
+    # Run Reprocess daily at 3 AM to retry failed extractions
+    - cron: '0 3 * * *'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
@@ -16,7 +18,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -40,11 +42,13 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python scout_lemon8.py "https://www.lemon8-app.com/experience/new-york-eat?region=us"
+          # Process first 20 URLs per run to avoid timeout (GitHub Actions has time limits)
+          # The script will generate ~400+ URLs, but we'll process them in batches
+          python scout_lemon8.py 20
       
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: scout-logs
           path: |
@@ -58,7 +62,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -87,9 +91,47 @@ jobs:
       
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: miner-logs
+          path: |
+            *.log
+            *.txt
+
+  reprocess:
+    name: Reprocess - Retry Failed Extractions
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 3 * * *' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Reprocess
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          # Reprocess up to 20 failed extractions per run
+          # This retries articles that failed LLM extraction
+          python reprocess_failed_extractions.py 20
+      
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reprocess-logs
           path: |
             *.log
             *.txt

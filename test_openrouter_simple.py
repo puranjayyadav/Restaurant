@@ -1,7 +1,19 @@
+import os
 import requests
 import json
 
-API_KEY = "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"
+# Load from environment variable - NEVER hardcode API keys!
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not API_KEY:
+    print("ERROR: OPENROUTER_API_KEY not found in environment variables")
+    print("Set it in your .env file or as an environment variable")
+    exit(1)
 
 print("="*60)
 print("Testing OpenRouter API")

@@ -4,7 +4,18 @@ import sys
 import requests
 
 # API Key
-OPENROUTER_API_KEY = "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"
+# Load from environment variable - NEVER hardcode API keys!
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    print("ERROR: OPENROUTER_API_KEY not found in environment variables")
+    exit(1)
 
 # Example HTML content (simplified)
 example_html = """<section id="article-content">

@@ -12,14 +12,26 @@ except ImportError:
     pass  # dotenv not required if using environment variables directly
 
 # Supabase configuration - set these as environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+# Re-read from environment each time to ensure we get the latest values
+def get_supabase_credentials():
+    """Get Supabase credentials from environment variables"""
+    url = os.getenv("SUPABASE_URL", "")
+    key = os.getenv("SUPABASE_KEY", "")
+    # Strip whitespace and newlines (common issue with GitHub Secrets)
+    url = url.strip() if url else ""
+    key = key.strip() if key else ""
+    return url, key
 
 def get_supabase_client() -> Optional[Client]:
     """Create and return Supabase client"""
+    SUPABASE_URL, SUPABASE_KEY = get_supabase_credentials()
+    
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("⚠ Warning: SUPABASE_URL and SUPABASE_KEY not set!")
         print("Set them as environment variables or update this file.")
+        # Debug: Show what we got
+        print(f"  SUPABASE_URL: {'SET' if SUPABASE_URL else 'NOT SET'}")
+        print(f"  SUPABASE_KEY: {'SET' if SUPABASE_KEY else 'NOT SET'}")
         return None
     
     try:
@@ -183,6 +195,27 @@ def save_article_to_db(url: str, html_content: str = None, itinerary_data: Dict 
     except Exception as e:
         print(f"Error saving article to database: {e}")
         return False
+
+def get_failed_extractions(limit: int = None) -> List[Dict]:
+    """Get articles that failed LLM extraction"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return []
+    
+    try:
+        query = supabase.table("lemon8_articles")\
+            .select("*")\
+            .not_.is_("extraction_error", "null")\
+            .eq("extraction_error", "Failed to extract itinerary data")
+        
+        if limit:
+            query = query.limit(limit)
+        
+        result = query.execute()
+        return result.data if result.data else []
+    except Exception as e:
+        print(f"Error fetching failed extractions: {e}")
+        return []
 
 def get_queue_stats() -> Dict:
     """Get statistics about the crawl queue"""

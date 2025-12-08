@@ -7,12 +7,20 @@ import re
 import requests
 from typing import Dict, List, Optional
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if using environment variables directly
+
 # Input and output files
 INPUT_FILE = "lemon8_article_links.json"
 OUTPUT_FILE = "lemon8_article_links.json"
 
-# API Keys (fallback if not in environment variables)
-OPENROUTER_API_KEY = "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"
+# API Keys - MUST be set via environment variable (OPENROUTER_API_KEY)
+# Never hardcode API keys in source code!
+OPENROUTER_API_KEY = None  # Removed hardcoded key for security
 
 # LLM Service Configuration
 EXTRACTION_PROMPT = """You are a precision Data Extraction Agent. Your job is to convert raw HTML content from social media posts into structured JSON itineraries.
@@ -52,9 +60,10 @@ def extract_with_openrouter(html_content: str, api_key: Optional[str] = None, lo
         log_func = print
     
     if not api_key:
-        api_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            log_func("  ⚠ OpenRouter: No API key found")
+            log_func("  ⚠ OpenRouter: No API key found in environment variables")
+            log_func("  ⚠ Set OPENROUTER_API_KEY in your .env file or environment")
             return None
     
     # Truncate HTML content if too large (OpenRouter has token limits)
@@ -274,7 +283,14 @@ def main():
     log_print(f"{'='*60}")
     
     # Check for API keys
-    openrouter_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    
+    if not openrouter_key:
+        log_print("\n✗ ERROR: OPENROUTER_API_KEY not found in environment variables")
+        log_print("  Please set it in your .env file or as an environment variable")
+        log_print("  Make sure your .env file exists and contains: OPENROUTER_API_KEY=sk-or-v1-...")
+        log_f.close()
+        sys.exit(1)
     
     log_print("\n✓ OpenRouter API key configured")
     log_print("Ready to extract itinerary data!\n")

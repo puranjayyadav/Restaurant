@@ -6,14 +6,90 @@ import json
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
+
+# Load environment variables from .env file (for local development)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if using environment variables directly
+
 from supabase_config import add_urls_to_queue, get_queue_stats
 
-# Default seed URLs - can be passed as arguments
-DEFAULT_SEED_URLS = [
-    "https://www.lemon8-app.com/experience/new-york-eat?region=us",
-    # Add more seed URLs here (hashtags, influencer pages, etc.)
-]
+def get_nyc_seed_urls():
+    """
+    Generate high-value NYC seed URLs using Neighborhood + Intent strategy.
+    This creates targeted search URLs that Lemon8 users actually use.
+    """
+    # 1. Primary Locations (The "Hot" spots)
+    neighborhoods = [
+        # Manhattan (Downtown)
+        "SoHo", "West Village", "East Village", "Lower East Side", "Chinatown",
+        "Tribeca", "Nolita", "Greenwich Village", "NoHo", "Financial District",
+        # Manhattan (Mid/Uptown)
+        "Chelsea", "Flatiron", "Nomad", "Hell's Kitchen", "Upper West Side",
+        "Upper East Side", "Harlem", "Washington Heights",
+        # Brooklyn (The "Cool" Belt)
+        "Williamsburg", "Greenpoint", "Bushwick", "DUMBO", "Brooklyn Heights",
+        "Cobble Hill", "Carroll Gardens", "Fort Greene", "Bed-Stuy", "Park Slope",
+        # Queens (Foodie Hubs)
+        "Astoria", "Long Island City", "Jackson Heights", "Flushing", "Ridgewood",
+    ]
+    
+    # 2. High-Intent Keywords
+    intents = [
+        "food guide", "best restaurants", "hidden gems", "itinerary",
+        "things to do", "date night", "coffee shops", "thrift stores",
+        "photo spots", "weekend guide", "cheap eats", "solo date",
+        "speakeasy", "rooftop bars", "sample sales", "brunch spots",
+        "dessert places", "pizza", "bagels", "sushi", "pasta", "tacos",
+        "aesthetic places", "instagrammable", "non touristy",
+        "girls night", "luxury", "budget friendly"
+    ]
+    
+    # 3. "Mega" Keywords (Broad searches that return high volume)
+    mega_keywords = [
+        "NYC itinerary 3 days",
+        "NYC aesthetic places",
+        "New York non touristy things to do",
+        "NYC food bucket list",
+        "NYC weekend recap",
+        "NYC rainy day activities",
+        "Best photo spots NYC",
+        "NYC hidden gems",
+        "NYC date night ideas",
+        "NYC solo date ideas"
+    ]
+    
+    # Generate the URLs
+    base_url = "https://www.lemon8-app.com/discover/"
+    all_urls = []
+    
+    # A. Neighborhood + Intent Combinations (e.g., "SoHo NYC hidden gems")
+    for hood in neighborhoods:
+        for intent in intents:
+            query = f"{hood} NYC {intent}"  # Adding "NYC" helps disambiguate
+            encoded = quote(query)
+            all_urls.append(f"{base_url}{encoded}?region=us")
+    
+    # B. Mega Keywords (standalone high-volume searches)
+    for keyword in mega_keywords:
+        encoded = quote(keyword)
+        all_urls.append(f"{base_url}{encoded}?region=us")
+    
+    # C. Keep some experience/hashtag URLs for variety
+    experience_urls = [
+        "https://www.lemon8-app.com/experience/new-york-eat?region=us",
+        "https://www.lemon8-app.com/experience/new-york-travel?region=us",
+        "https://www.lemon8-app.com/experience/new-york-lifestyle?region=us",
+    ]
+    all_urls.extend(experience_urls)
+    
+    return all_urls
+
+# Default seed URLs - generated dynamically using NYC strategy
+DEFAULT_SEED_URLS = get_nyc_seed_urls()
 
 def find_brave_path():
     """Find Brave browser executable"""
@@ -121,12 +197,42 @@ def main():
     print("🌱 LEMON8 SCOUT - URL Discovery")
     print("=" * 60)
     
+    # Check if running in CI (non-interactive environment)
+    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+    
+    # Debug: Show environment variable status (only first few chars for security)
+    if is_ci:
+        supabase_url = os.getenv("SUPABASE_URL", "")
+        supabase_key = os.getenv("SUPABASE_KEY", "")
+        print(f"\n🔍 Environment Check (CI mode):")
+        print(f"  SUPABASE_URL: {'SET' if supabase_url else 'NOT SET'} ({supabase_url[:30] + '...' if supabase_url else 'N/A'})")
+        print(f"  SUPABASE_KEY: {'SET' if supabase_key else 'NOT SET'} ({supabase_key[:20] + '...' if supabase_key else 'N/A'})")
+    
     # Get seed URLs from command line or use defaults
-    seed_urls = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_SEED_URLS
+    if len(sys.argv) > 1:
+        # Check if first arg is a number (limit) or a URL
+        try:
+            limit = int(sys.argv[1])
+            # First arg is a limit number
+            seed_urls = DEFAULT_SEED_URLS[:limit] if limit > 0 else DEFAULT_SEED_URLS
+            print(f"\n📋 Using first {len(seed_urls)} of {len(DEFAULT_SEED_URLS)} generated NYC seed URLs")
+        except ValueError:
+            # First arg is a URL (or not a number)
+            seed_urls = sys.argv[1:]
+            print(f"\n📋 Using {len(seed_urls)} manually provided seed URL(s)")
+    else:
+        # Use all auto-generated NYC seed URLs
+        seed_urls = DEFAULT_SEED_URLS
+        print(f"\n📋 Generated {len(seed_urls)} NYC seed URLs using Neighborhood + Intent strategy")
+        print(f"  Example URLs:")
+        for i, url in enumerate(seed_urls[:3], 1):
+            print(f"    {i}. {url}")
+        if len(seed_urls) > 3:
+            print(f"    ... and {len(seed_urls) - 3} more")
+        print(f"\n  💡 Tip: Limit URLs by running: python scout_lemon8.py 50")
     
     if not seed_urls:
-        print("No seed URLs provided!")
-        print("Usage: python scout_lemon8.py <url1> <url2> ...")
+        print("No seed URLs available!")
         sys.exit(1)
     
     # Check Supabase connection
@@ -139,9 +245,22 @@ def main():
         print(f"  Failed: {stats.get('failed', 0)}")
     else:
         print("⚠ Warning: Could not connect to Supabase. Check your credentials.")
-        response = input("Continue anyway? (y/n): ")
-        if response.lower() != 'y':
+        # Always exit in CI - never prompt for input
+        if is_ci:
+            print("⚠ Running in CI environment - exiting due to Supabase connection failure")
+            print("⚠ Make sure SUPABASE_URL and SUPABASE_KEY are set as GitHub Secrets")
+            print("⚠ Also check that there are no extra spaces or newlines in the secret values")
             sys.exit(1)
+        else:
+            # Only prompt in local (non-CI) environment
+            try:
+                response = input("Continue anyway? (y/n): ")
+                if response.lower() != 'y':
+                    sys.exit(1)
+            except (EOFError, KeyboardInterrupt):
+                # Handle case where stdin is not available
+                print("⚠ Cannot read input - exiting")
+                sys.exit(1)
     
     # Find Brave (optional - will use system Chrome in CI)
     brave_path = find_brave_path()

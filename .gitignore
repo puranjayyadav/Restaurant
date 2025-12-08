@@ -3,6 +3,15 @@
 .env.local
 .env.*.local
 
+# Credentials and secrets (NEVER commit these!)
+creds/
+*.json
+!package.json
+!package-lock.json
+*-adminsdk-*.json
+firebase-adminsdk-*.json
+service-account*.json
+
 # Python
 __pycache__/
 *.py[cod]

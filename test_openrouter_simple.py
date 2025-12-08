@@ -1,7 +1,6 @@
 import requests
 import json
 
-API_KEY = "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"
 
 print("="*60)
 print("Testing OpenRouter API")

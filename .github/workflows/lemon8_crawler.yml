@@ -36,12 +36,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install selenium
+          echo "Verifying selenium installation..."
+          python -c "import selenium; print(f'✓ Selenium version: {selenium.__version__}')" || (echo "✗ ERROR: Selenium not installed!" && exit 1)
+          python -c "import sys; print(f'Python path: {sys.executable}')"
+          pip show selenium || echo "Warning: pip show selenium failed"
       
       - name: Verify ChromeDriver
         run: |
           echo "Testing ChromeDriver installation..."
           chromium-browser --version || echo "Chromium version check failed"
           chromedriver --version || echo "ChromeDriver version check failed"
+          echo "Verifying selenium is available..."
+          python -c "import selenium; print('✓ Selenium is available')" || (echo "✗ Selenium import failed!" && exit 1)
           echo "Testing Selenium WebDriver..."
           python -c "
           from selenium import webdriver

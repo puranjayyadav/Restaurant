@@ -361,15 +361,27 @@ def main():
         sys.stdout.flush()
         
         # Filter out already-processed seed URLs
+        print(f"\n🔍 Checking which seed URLs have already been processed...", flush=True)
+        sys.stdout.flush()
         unprocessed_seeds = []
-        for seed_url in seed_urls:
-            if is_seed_url_processed(seed_url):
-                print(f"⏭️  Skipping already-processed seed URL: {seed_url}", flush=True)
+        skipped_count = 0
+        
+        for idx, seed_url in enumerate(seed_urls, 1):
+            # Show progress every 50 URLs
+            if idx % 50 == 0 or idx == len(seed_urls):
+                print(f"  Checked {idx}/{len(seed_urls)} seed URLs... ({len(unprocessed_seeds)} unprocessed, {skipped_count} skipped)", flush=True)
                 sys.stdout.flush()
+            
+            if is_seed_url_processed(seed_url):
+                skipped_count += 1
+                # Only print first few skipped URLs to avoid spam
+                if skipped_count <= 5:
+                    print(f"⏭️  Skipping already-processed seed URL: {seed_url}", flush=True)
+                    sys.stdout.flush()
             else:
                 unprocessed_seeds.append(seed_url)
         
-        print(f"\n📊 Found {len(unprocessed_seeds)} unprocessed seed URLs out of {len(seed_urls)} total", flush=True)
+        print(f"\n📊 Found {len(unprocessed_seeds)} unprocessed seed URLs out of {len(seed_urls)} total ({skipped_count} already processed)", flush=True)
         sys.stdout.flush()
         
         if not unprocessed_seeds:

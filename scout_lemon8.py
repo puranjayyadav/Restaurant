@@ -34,7 +34,7 @@ except ImportError:
 print("Importing supabase_config...", flush=True)
 sys.stdout.flush()
 
-from supabase_config import add_urls_to_queue, get_queue_stats, is_seed_url_processed
+from supabase_config import add_urls_to_queue, get_queue_stats, is_seed_url_processed, get_processed_seed_urls
 
 print("All imports successful", flush=True)
 sys.stdout.flush()
@@ -360,19 +360,20 @@ def main():
         print(f"\n🚀 Starting to process {len(seed_urls)} seed URLs...", flush=True)
         sys.stdout.flush()
         
-        # Filter out already-processed seed URLs
+        # Filter out already-processed seed URLs (optimized batch check)
         print(f"\n🔍 Checking which seed URLs have already been processed...", flush=True)
         sys.stdout.flush()
+        
+        # Get all processed source URLs in one query (much faster than checking individually)
+        processed_urls = get_processed_seed_urls()
+        print(f"  Found {len(processed_urls)} already-processed seed URLs in database", flush=True)
+        sys.stdout.flush()
+        
         unprocessed_seeds = []
         skipped_count = 0
         
-        for idx, seed_url in enumerate(seed_urls, 1):
-            # Show progress every 50 URLs
-            if idx % 50 == 0 or idx == len(seed_urls):
-                print(f"  Checked {idx}/{len(seed_urls)} seed URLs... ({len(unprocessed_seeds)} unprocessed, {skipped_count} skipped)", flush=True)
-                sys.stdout.flush()
-            
-            if is_seed_url_processed(seed_url):
+        for seed_url in seed_urls:
+            if seed_url in processed_urls:
                 skipped_count += 1
                 # Only print first few skipped URLs to avoid spam
                 if skipped_count <= 5:

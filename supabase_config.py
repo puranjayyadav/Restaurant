@@ -237,6 +237,31 @@ def is_seed_url_processed(source_url: str) -> bool:
         print(f"Error checking if seed URL is processed: {e}")
         return False  # If we can't check, assume not processed to be safe
 
+def get_processed_seed_urls() -> set:
+    """Get all source_urls that have been processed (more efficient for batch checking)"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return set()
+    
+    try:
+        # Get all distinct source_urls from the queue
+        result = supabase.table("crawl_queue")\
+            .select("source_url")\
+            .not_.is_("source_url", "null")\
+            .execute()
+        
+        # Extract unique source_urls
+        processed_urls = set()
+        if result.data:
+            for row in result.data:
+                if row.get("source_url"):
+                    processed_urls.add(row["source_url"])
+        
+        return processed_urls
+    except Exception as e:
+        print(f"Error getting processed seed URLs: {e}")
+        return set()  # If we can't check, return empty set to be safe
+
 def get_queue_stats() -> Dict:
     """Get statistics about the crawl queue"""
     supabase = get_supabase_client()

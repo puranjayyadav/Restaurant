@@ -48,3 +48,23 @@ create trigger update_lemon8_articles_updated_at
   before update on lemon8_articles
   for each row
   execute function update_updated_at_column();
+
+-- Yelp URL Queue table
+create table if not exists crawl_queue_yelp (
+  yelp_id text primary key,
+  url text not null,
+  place_name text,
+  city text,
+  lemon8_source jsonb, -- Stores the original restaurant data from Lemon8 article
+  status text default 'pending', -- 'pending', 'processing', 'completed', 'failed'
+  discovered_at timestamp default now(),
+  processed_at timestamp,
+  error_message text,
+  retry_count integer default 0,
+  max_retries integer default 3
+);
+
+-- Index for fast lookup
+create index if not exists idx_yelp_queue_status on crawl_queue_yelp(status);
+create index if not exists idx_yelp_queue_discovered on crawl_queue_yelp(discovered_at);
+create index if not exists idx_yelp_queue_city on crawl_queue_yelp(city);

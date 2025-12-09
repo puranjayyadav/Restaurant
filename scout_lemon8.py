@@ -378,6 +378,19 @@ def discover_article_urls(driver, seed_url, max_scrolls=100):
         sys.stdout.flush()
         return []
 
+def get_next_unprocessed_batch(all_urls, processed_urls, batch_size, start_index=0):
+    """Get the next batch of unprocessed URLs starting from start_index"""
+    unprocessed = []
+    current_index = start_index
+    
+    while len(unprocessed) < batch_size and current_index < len(all_urls):
+        url = all_urls[current_index]
+        if url not in processed_urls:
+            unprocessed.append(url)
+        current_index += 1
+    
+    return unprocessed, current_index
+
 def main():
     """Main scout function"""
     print("=" * 60, flush=True)
@@ -399,33 +412,40 @@ def main():
         print(f"  SUPABASE_KEY: {'SET' if supabase_key else 'NOT SET'} ({supabase_key[:20] + '...' if supabase_key else 'N/A'})", flush=True)
         sys.stdout.flush()
     
-    # Get seed URLs from command line or use defaults
-    print("\n📋 Processing seed URLs...", flush=True)
-    sys.stdout.flush()
+    # Parse command line arguments
+    batch_size = 20  # Default batch size
+    auto_batch = True  # Default to auto-batch mode
+    all_seed_urls = DEFAULT_SEED_URLS  # All available seed URLs
+    manual_urls = None  # Manually provided URLs
+    
     if len(sys.argv) > 1:
-        # Check if first arg is a number (limit) or a URL
+        # Check if first arg is a number (batch size) or a URL
         try:
-            limit = int(sys.argv[1])
-            # First arg is a limit number
-            seed_urls = DEFAULT_SEED_URLS[:limit] if limit > 0 else DEFAULT_SEED_URLS
-            print(f"📋 Using first {len(seed_urls)} of {len(DEFAULT_SEED_URLS)} generated NYC seed URLs", flush=True)
+            batch_size = int(sys.argv[1])
+            # Check for --no-auto-batch flag
+            if len(sys.argv) > 2 and sys.argv[2] == "--no-auto-batch":
+                auto_batch = False
+            print(f"📋 Batch size: {batch_size}, Auto-batch mode: {'ON' if auto_batch else 'OFF'}", flush=True)
         except ValueError:
             # First arg is a URL (or not a number)
-            seed_urls = sys.argv[1:]
-            print(f"📋 Using {len(seed_urls)} manually provided seed URL(s)", flush=True)
+            manual_urls = sys.argv[1:]
+            auto_batch = False  # Disable auto-batch for manual URLs
+            print(f"📋 Using {len(manual_urls)} manually provided seed URL(s)", flush=True)
     else:
-        # Use all auto-generated NYC seed URLs
-        seed_urls = DEFAULT_SEED_URLS
-        print(f"📋 Generated {len(seed_urls)} NYC seed URLs using Neighborhood + Intent strategy", flush=True)
+        print(f"📋 Generated {len(all_seed_urls)} NYC seed URLs using Neighborhood + Intent strategy", flush=True)
+        print(f"  Batch size: {batch_size}, Auto-batch mode: {'ON' if auto_batch else 'OFF'}", flush=True)
         print(f"  Example URLs:", flush=True)
-        for i, url in enumerate(seed_urls[:3], 1):
+        for i, url in enumerate(all_seed_urls[:3], 1):
             print(f"    {i}. {url}", flush=True)
-        if len(seed_urls) > 3:
-            print(f"    ... and {len(seed_urls) - 3} more", flush=True)
-        print(f"\n  💡 Tip: Limit URLs by running: python scout_lemon8.py 50", flush=True)
-    sys.stdout.flush()
+        if len(all_seed_urls) > 3:
+            print(f"    ... and {len(all_seed_urls) - 3} more", flush=True)
+        print(f"\n  💡 Tip: Limit batch size by running: python scout_lemon8.py 50", flush=True)
+        print(f"  💡 Tip: Disable auto-batch: python scout_lemon8.py 20 --no-auto-batch", flush=True)
     
-    if not seed_urls:
+    # Use manual URLs if provided, otherwise use all seed URLs
+    seed_urls_to_check = manual_urls if manual_urls else all_seed_urls
+    
+    if not seed_urls_to_check:
         print("✗ No seed URLs available!", flush=True)
         sys.stdout.flush()
         sys.exit(1)
@@ -489,78 +509,117 @@ def main():
     
     total_discovered = 0
     all_discovered_urls = []  # Track all discovered URLs for final summary
+    current_index = 0  # Track position in all seed URLs
+    batch_number = 1  # Track batch number
     
     try:
-        print(f"\n🚀 Starting to process {len(seed_urls)} seed URLs...", flush=True)
-        sys.stdout.flush()
-        
-        # Filter out already-processed seed URLs (optimized batch check)
-        print(f"\n🔍 Checking which seed URLs have already been processed...", flush=True)
+        print(f"\n🚀 Starting to process seed URLs (total available: {len(seed_urls_to_check)})...", flush=True)
         sys.stdout.flush()
         
         # Get all processed source URLs in one query (much faster than checking individually)
+        print(f"\n🔍 Checking which seed URLs have already been processed...", flush=True)
+        sys.stdout.flush()
         processed_urls = get_processed_seed_urls()
         print(f"  Found {len(processed_urls)} already-processed seed URLs in database", flush=True)
         sys.stdout.flush()
         
-        unprocessed_seeds = []
-        skipped_count = 0
-        
-        for seed_url in seed_urls:
-            if seed_url in processed_urls:
-                skipped_count += 1
-                # Only print first few skipped URLs to avoid spam
-                if skipped_count <= 5:
-                    print(f"⏭️  Skipping already-processed seed URL: {seed_url}", flush=True)
-                    sys.stdout.flush()
-            else:
-                unprocessed_seeds.append(seed_url)
-        
-        print(f"\n📊 Found {len(unprocessed_seeds)} unprocessed seed URLs out of {len(seed_urls)} total ({skipped_count} already processed)", flush=True)
-        sys.stdout.flush()
-        
-        if not unprocessed_seeds:
-            print("\n✓ All seed URLs have already been processed!", flush=True)
-            sys.stdout.flush()
-            return
-        
-        for idx, seed_url in enumerate(unprocessed_seeds, 1):
-            print(f"\n{'='*60}", flush=True)
-            print(f"Processing seed URL {idx}/{len(unprocessed_seeds)}: {seed_url}", flush=True)
-            sys.stdout.flush()
-            
-            # Discover URLs from this seed
-            urls = discover_article_urls(driver, seed_url, max_scrolls=100)
-            
-            if urls:
-                # Track all discovered URLs
-                all_discovered_urls.extend(urls)
-                
-                # Extract hashtag from URL if possible
-                source_hashtag = None
-                if "hashtag" in seed_url or "experience" in seed_url:
-                    source_hashtag = seed_url.split("/")[-1].split("?")[0]
-                
-                # Add to queue
-                print(f"  Adding {len(urls)} URLs to queue...", flush=True)
-                sys.stdout.flush()
-                added = add_urls_to_queue(
-                    urls=urls,
-                    source_hashtag=source_hashtag,
-                    source_url=seed_url
+        # Main processing loop - continues until we find unprocessed URLs or exhaust all URLs
+        while current_index < len(seed_urls_to_check):
+            # Get next batch of unprocessed URLs
+            if auto_batch:
+                unprocessed_seeds, new_index = get_next_unprocessed_batch(
+                    seed_urls_to_check, processed_urls, batch_size, current_index
                 )
-                total_discovered += added
-                print(f"  ✓ Added {added} new URLs to queue", flush=True)
+                current_index = new_index
+            else:
+                # Non-auto-batch mode: just get the first batch
+                unprocessed_seeds, current_index = get_next_unprocessed_batch(
+                    seed_urls_to_check, processed_urls, batch_size, 0
+                )
+                current_index = len(seed_urls_to_check)  # Exit after first batch
+            
+            if not unprocessed_seeds:
+                if auto_batch:
+                    print(f"\n📊 Batch {batch_number}: All URLs in this batch are already processed", flush=True)
+                    print(f"  Continuing to next batch... (checked {current_index}/{len(seed_urls_to_check)} URLs so far)", flush=True)
+                    sys.stdout.flush()
+                    batch_number += 1
+                    
+                    # If we've checked all URLs, exit
+                    if current_index >= len(seed_urls_to_check):
+                        print(f"\n✓ All {len(seed_urls_to_check)} seed URLs have been checked!", flush=True)
+                        print(f"  All available seed URLs are already processed.", flush=True)
+                        sys.stdout.flush()
+                        break
+                    continue
+                else:
+                    print(f"\n✓ All seed URLs in this batch have already been processed!", flush=True)
+                    sys.stdout.flush()
+                    break
+            
+            print(f"\n📊 Batch {batch_number}: Found {len(unprocessed_seeds)} unprocessed seed URLs", flush=True)
+            if auto_batch:
+                print(f"  Progress: {current_index}/{len(seed_urls_to_check)} URLs checked", flush=True)
+            sys.stdout.flush()
+            
+            # Process each unprocessed seed URL in this batch
+            for idx, seed_url in enumerate(unprocessed_seeds, 1):
+                print(f"\n{'='*60}", flush=True)
+                print(f"Processing seed URL {idx}/{len(unprocessed_seeds)} in batch {batch_number}: {seed_url}", flush=True)
                 sys.stdout.flush()
                 
-                # Rate limiting - be respectful
-                time.sleep(2)
-            else:
-                print(f"  ⚠ No URLs discovered from {seed_url}", flush=True)
-                sys.stdout.flush()
+                # Discover URLs from this seed
+                urls = discover_article_urls(driver, seed_url, max_scrolls=100)
+                
+                if urls:
+                    # Track all discovered URLs
+                    all_discovered_urls.extend(urls)
+                    
+                    # Extract hashtag from URL if possible
+                    source_hashtag = None
+                    if "hashtag" in seed_url or "experience" in seed_url:
+                        source_hashtag = seed_url.split("/")[-1].split("?")[0]
+                    
+                    # Add to queue
+                    print(f"  Adding {len(urls)} URLs to queue...", flush=True)
+                    sys.stdout.flush()
+                    added = add_urls_to_queue(
+                        urls=urls,
+                        source_hashtag=source_hashtag,
+                        source_url=seed_url
+                    )
+                    total_discovered += added
+                    print(f"  ✓ Added {added} new URLs to queue", flush=True)
+                    sys.stdout.flush()
+                    
+                    # Rate limiting - be respectful
+                    time.sleep(2)
+                else:
+                    print(f"  ⚠ No URLs discovered from {seed_url}", flush=True)
+                    sys.stdout.flush()
+            
+            # If not in auto-batch mode, exit after processing first batch
+            if not auto_batch:
+                break
+            
+            # Refresh processed URLs set to include URLs we just processed
+            # This ensures we don't accidentally re-check URLs in subsequent batches
+            print(f"\n🔄 Refreshing processed URLs list...", flush=True)
+            sys.stdout.flush()
+            processed_urls = get_processed_seed_urls()
+            print(f"  Updated: {len(processed_urls)} processed seed URLs in database", flush=True)
+            sys.stdout.flush()
+            
+            # Move to next batch
+            batch_number += 1
+            print(f"\n{'='*60}", flush=True)
+            print(f"✓ Batch {batch_number - 1} completed. Moving to next batch...", flush=True)
+            sys.stdout.flush()
         
         print(f"\n{'='*60}", flush=True)
         print(f"✓ Scout completed!", flush=True)
+        print(f"  Batches processed: {batch_number - 1}", flush=True)
+        print(f"  Total URLs checked: {current_index}/{len(seed_urls_to_check)}", flush=True)
         print(f"  Total new URLs added to queue: {total_discovered}", flush=True)
         sys.stdout.flush()
         

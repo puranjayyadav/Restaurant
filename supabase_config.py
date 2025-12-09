@@ -298,3 +298,79 @@ def get_queue_stats() -> Dict:
     except Exception as e:
         print(f"Error getting queue stats: {e}")
         return {}
+
+# Yelp URL Queue Functions
+def add_yelp_url_to_queue(yelp_id: str, yelp_url: str, place_name: str, city: str, 
+                          lemon8_source: Dict, status: str = "pending") -> bool:
+    """Add Yelp URL to crawl_queue_yelp table (ignores duplicates)"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        # Check if Yelp ID already exists
+        existing = supabase.table("crawl_queue_yelp")\
+            .select("yelp_id")\
+            .eq("yelp_id", yelp_id)\
+            .execute()
+        
+        if existing.data:
+            return False  # Already exists
+        
+        # Insert new Yelp URL
+        result = supabase.table("crawl_queue_yelp").insert({
+            "yelp_id": yelp_id,
+            "url": yelp_url,
+            "place_name": place_name,
+            "city": city,
+            "lemon8_source": lemon8_source,
+            "status": status,
+            "discovered_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }).execute()
+        
+        return bool(result.data)
+    except Exception as e:
+        print(f"Error adding Yelp URL to queue: {e}")
+        return False
+
+def get_processed_article_urls_for_yelp() -> set:
+    """Get all article URLs that have been processed for Yelp URL discovery"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return set()
+    
+    try:
+        # Get all distinct article URLs from crawl_queue_yelp
+        result = supabase.table("crawl_queue_yelp")\
+            .select("lemon8_source")\
+            .not_.is_("lemon8_source", "null")\
+            .execute()
+        
+        processed_urls = set()
+        if result.data:
+            for row in result.data:
+                lemon8_source = row.get("lemon8_source", {})
+                article_url = lemon8_source.get("article_url")
+                if article_url:
+                    processed_urls.add(article_url)
+        
+        return processed_urls
+    except Exception as e:
+        print(f"Error getting processed article URLs: {e}")
+        return set()
+
+def mark_article_yelp_scouted(article_url: str) -> bool:
+    """Mark a lemon8_article as having been processed for Yelp URL discovery"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        # Update the article to mark it as Yelp-scouted
+        # We'll use a JSONB field or add a boolean field
+        # For now, we'll track it via the crawl_queue_yelp table
+        # This function is for future use if we add a yelp_urls_scouted field
+        return True
+    except Exception as e:
+        print(f"Error marking article as Yelp-scouted: {e}")
+        return False

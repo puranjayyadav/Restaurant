@@ -30,14 +30,20 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-import django
 
-# Setup Django environment
-sys.path.append(os.path.join(os.path.dirname(__file__), 'my_new_project'))
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_new_project.settings')
-django.setup()
-
-from res_backend.models import ScrapedRestaurant
+# Optional Django import - only needed for functions that use Django models
+try:
+    import django
+    # Setup Django environment
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'my_new_project'))
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_new_project.settings')
+    django.setup()
+    from res_backend.models import ScrapedRestaurant
+    DJANGO_AVAILABLE = True
+except (ImportError, ModuleNotFoundError, Exception):
+    # Django not available - functions that require it will fail gracefully
+    ScrapedRestaurant = None
+    DJANGO_AVAILABLE = False
 
 
 def setup_chromium_driver(headless: bool = True):
@@ -84,7 +90,8 @@ def setup_chromium_driver(headless: bool = True):
 
 def search_yelp_url_duckduckgo(restaurant_name: str, city: str, state: str = None, driver: webdriver.Chrome = None) -> Optional[str]:
     """
-    Search for Yelp URL using DuckDuckGo search engine with Selenium.
+    Search for Yelp URL using DuckDuckGo search engine.
+    Downloads HTML once and parses it offline to minimize blocking risk.
     
     Args:
         restaurant_name: Name of the restaurant
@@ -96,6 +103,7 @@ def search_yelp_url_duckduckgo(restaurant_name: str, city: str, state: str = Non
         Yelp URL if found, None otherwise
     """
     should_close_driver = driver is None
+    html_content = None
     
     try:
         if driver is None:
@@ -109,44 +117,52 @@ def search_yelp_url_duckduckgo(restaurant_name: str, city: str, state: str = Non
         url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
         
         # Navigate to search page
+        print(f"  Loading DuckDuckGo search page...")
         driver.get(url)
-        time.sleep(3)  # Wait for page to load (increased for reliability)
         
-        # Try to find result links - DuckDuckGo uses various selectors
-        yelp_pattern = r'https?://(?:www\.)?yelp\.com/biz/[^\s"<>]+'
+        # Wait for page to load (minimal wait to reduce blocking risk)
+        time.sleep(3)
         
-        # Method 1: Look for links with class "result__a"
-        try:
-            result_links = driver.find_elements(By.CSS_SELECTOR, 'a.result__a')
-            for link in result_links:
-                href = link.get_attribute('href')
-                if href and 'yelp.com/biz/' in href:
-                    yelp_url = href.split('?')[0]
-                    if yelp_url.startswith('http'):
-                        return yelp_url
-        except:
-            pass
+        # Download HTML immediately and close browser quickly
+        print(f"  Downloading HTML content...")
+        html_content = driver.page_source
         
-        # Method 2: Look for all links and check for Yelp URLs
-        try:
-            all_links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in all_links:
-                href = link.get_attribute('href')
-                if href and 'yelp.com/biz/' in href:
-                    yelp_url = href.split('?')[0]
-                    if yelp_url.startswith('http'):
-                        return yelp_url
-        except:
-            pass
+        # Close browser immediately after getting HTML
+        if should_close_driver and driver:
+            driver.quit()
+            driver = None
         
-        # Method 3: Regex search in page source
-        page_source = driver.page_source
-        matches = re.findall(yelp_pattern, page_source)
+        # Now parse HTML offline (no more browser interaction)
+        print(f"  Parsing HTML offline for Yelp URLs...")
+        yelp_pattern = r'https?://(?:www\.)?yelp\.com/biz/[^\s"<>?&]+'
+        
+        # Search for Yelp URLs in the HTML
+        matches = re.findall(yelp_pattern, html_content, re.IGNORECASE)
+        
         if matches:
-            yelp_url = matches[0].split('?')[0].split('"')[0].split("'")[0]
+            # Clean and return first match
+            yelp_url = matches[0].split('?')[0].split('&')[0].split('"')[0].split("'")[0]
             if yelp_url.startswith('http'):
+                print(f"  ✓ Found {len(matches)} Yelp URL(s) in HTML")
                 return yelp_url
         
+        # Also check for DuckDuckGo redirect URLs that might contain Yelp
+        # DuckDuckGo uses /l/?kh=-1&uddg= format
+        redirect_pattern = r'/l/\?[^"]*uddg=([^"&]+)'
+        redirect_matches = re.findall(redirect_pattern, html_content)
+        
+        for redirect_url_encoded in redirect_matches:
+            try:
+                redirect_url = urllib.parse.unquote(redirect_url_encoded)
+                if 'yelp.com/biz/' in redirect_url:
+                    yelp_url = redirect_url.split('?')[0].split('&')[0]
+                    if yelp_url.startswith('http'):
+                        print(f"  ✓ Found Yelp URL via DuckDuckGo redirect")
+                        return yelp_url
+            except:
+                continue
+        
+        print(f"  ✗ No Yelp URLs found in HTML")
         return None
         
     except Exception as e:
@@ -159,7 +175,8 @@ def search_yelp_url_duckduckgo(restaurant_name: str, city: str, state: str = Non
 
 def search_yelp_url_google(restaurant_name: str, city: str, state: str = None, driver: webdriver.Chrome = None) -> Optional[str]:
     """
-    Fallback: Search for Yelp URL using Google search engine with Selenium.
+    Fallback: Search for Yelp URL using Google search engine.
+    Downloads HTML once and parses it offline to minimize blocking risk.
     
     Args:
         restaurant_name: Name of the restaurant
@@ -171,6 +188,7 @@ def search_yelp_url_google(restaurant_name: str, city: str, state: str = None, d
         Yelp URL if found, None otherwise
     """
     should_close_driver = driver is None
+    html_content = None
     
     try:
         if driver is None:
@@ -186,57 +204,79 @@ def search_yelp_url_google(restaurant_name: str, city: str, state: str = None, d
         url = f"https://www.google.com/search?q={encoded_query}"
         
         # Navigate to search page
+        print(f"  Loading Google search page...")
         driver.get(url)
-        time.sleep(3)  # Wait for page to load (increased for reliability)
         
-        yelp_pattern = r'https?://(?:www\.)?yelp\.com/biz/[^\s"<>]+'
+        # Wait for page to load (minimal wait to reduce blocking risk)
+        time.sleep(3)
         
-        # Method 1: Look for result links
-        try:
-            # Google result links are typically in divs with class "g" or similar
-            result_links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="yelp.com/biz"]')
-            for link in result_links:
-                href = link.get_attribute('href')
-                if href and 'yelp.com/biz/' in href:
-                    # Google may use /url?q= redirects
-                    if '/url?q=' in href:
-                        actual_url = urllib.parse.unquote(href.split('/url?q=')[1].split('&')[0])
-                    else:
-                        actual_url = href
-                    
-                    if 'yelp.com/biz/' in actual_url:
-                        yelp_url = actual_url.split('?')[0]
-                        if yelp_url.startswith('http'):
-                            return yelp_url
-        except:
-            pass
+        # Download HTML immediately and close browser quickly
+        print(f"  Downloading HTML content...")
+        html_content = driver.page_source
         
-        # Method 2: Look for all links
-        try:
-            all_links = driver.find_elements(By.TAG_NAME, 'a')
-            for link in all_links:
-                href = link.get_attribute('href')
-                if href and 'yelp.com/biz/' in href:
-                    if '/url?q=' in href:
-                        actual_url = urllib.parse.unquote(href.split('/url?q=')[1].split('&')[0])
-                    else:
-                        actual_url = href
-                    
-                    if 'yelp.com/biz/' in actual_url:
-                        yelp_url = actual_url.split('?')[0]
-                        if yelp_url.startswith('http'):
-                            return yelp_url
-        except:
-            pass
+        # Check if we're being blocked (CAPTCHA or similar)
+        page_text_lower = html_content.lower()
+        if 'captcha' in page_text_lower or 'unusual traffic' in page_text_lower or 'automated queries' in page_text_lower:
+            print("  ⚠ Warning: Google may be showing a CAPTCHA or blocking page")
+            # Still try to parse what we have
         
-        # Method 3: Regex search in page source
-        page_source = driver.page_source
-        matches = re.findall(yelp_pattern, page_source)
+        # Close browser immediately after getting HTML
+        if should_close_driver and driver:
+            driver.quit()
+            driver = None
+        
+        # Now parse HTML offline (no more browser interaction)
+        print(f"  Parsing HTML offline for Yelp URLs...")
+        yelp_pattern = r'https?://(?:www\.)?yelp\.com/biz/[^\s"<>?&]+'
+        
+        # Method 1: Direct Yelp URL pattern
+        matches = re.findall(yelp_pattern, html_content, re.IGNORECASE)
         if matches:
-            yelp_url = matches[0].split('?')[0].split('"')[0].split("'")[0]
+            yelp_url = matches[0].split('?')[0].split('&')[0].split('"')[0].split("'")[0]
             if yelp_url.startswith('http'):
+                print(f"  ✓ Found {len(matches)} Yelp URL(s) in HTML")
                 return yelp_url
         
+        # Method 2: Google redirect URLs (/url?q=)
+        # Google wraps URLs in /url?q= redirects
+        redirect_pattern = r'/url\?q=(https?://(?:www\.)?yelp\.com/biz/[^"&]+)'
+        redirect_matches = re.findall(redirect_pattern, html_content, re.IGNORECASE)
+        
+        for redirect_url in redirect_matches:
+            try:
+                # Decode the URL
+                decoded_url = urllib.parse.unquote(redirect_url)
+                if 'yelp.com/biz/' in decoded_url:
+                    yelp_url = decoded_url.split('?')[0].split('&')[0]
+                    if yelp_url.startswith('http'):
+                        print(f"  ✓ Found Yelp URL via Google redirect")
+                        return yelp_url
+            except:
+                continue
+        
+        # Method 3: Look for yelp.com/biz in any href attribute
+        href_pattern = r'href=["\']([^"\']*yelp\.com/biz/[^"\']+)["\']'
+        href_matches = re.findall(href_pattern, html_content, re.IGNORECASE)
+        
+        for href_url in href_matches:
+            try:
+                # Handle Google redirects
+                if '/url?q=' in href_url:
+                    decoded = urllib.parse.unquote(href_url.split('/url?q=')[1].split('&')[0])
+                else:
+                    decoded = href_url
+                
+                if 'yelp.com/biz/' in decoded:
+                    if not decoded.startswith('http'):
+                        decoded = f"https://{decoded}"
+                    yelp_url = decoded.split('?')[0].split('&')[0]
+                    if yelp_url.startswith('http'):
+                        print(f"  ✓ Found Yelp URL via href attribute")
+                        return yelp_url
+            except:
+                continue
+        
+        print(f"  ✗ No Yelp URLs found in HTML")
         return None
         
     except Exception as e:
@@ -247,7 +287,7 @@ def search_yelp_url_google(restaurant_name: str, city: str, state: str = None, d
             driver.quit()
 
 
-def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: bool = False) -> Optional[str]:
+def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: bool = False, headless: bool = True) -> Optional[str]:
     """
     Find Yelp URL using search engines. Tries DuckDuckGo first, then Google as fallback.
     Reuses the same WebDriver instance for efficiency.
@@ -257,6 +297,7 @@ def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: boo
         city: City where the restaurant is located
         state: Optional state abbreviation
         debug: Whether to print debug information
+        headless: Whether to run browser in headless mode (default: True)
     
     Returns:
         Yelp URL if found, None otherwise
@@ -264,7 +305,7 @@ def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: boo
     driver = None
     try:
         # Create a single driver instance to reuse
-        driver = setup_chromium_driver(headless=True)
+        driver = setup_chromium_driver(headless=headless)
         
         # Try DuckDuckGo first (more privacy-friendly, less likely to block)
         print(f"Searching DuckDuckGo for: {restaurant_name}, {city}, {state or ''}")
@@ -289,17 +330,21 @@ def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: boo
             driver.quit()
 
 
-def enrich_restaurant_with_yelp_url(restaurant: ScrapedRestaurant, delay: float = 1.0) -> bool:
+def enrich_restaurant_with_yelp_url(restaurant: 'ScrapedRestaurant', delay: float = 1.0, headless: bool = True) -> bool:
     """
     Enrich a single restaurant record with its Yelp URL.
+    Requires Django to be available.
     
     Args:
         restaurant: ScrapedRestaurant instance
         delay: Delay between requests (in seconds) to avoid rate limiting
+        headless: Whether to run browser in headless mode (default: True)
     
     Returns:
         True if URL was found and saved, False otherwise
     """
+    if not DJANGO_AVAILABLE:
+        raise ImportError("Django is required for enrich_restaurant_with_yelp_url. Use find_yelp_url instead.")
     # Skip if already has Yelp URL
     if restaurant.source_url and 'yelp.com' in restaurant.source_url:
         print(f"Skipping {restaurant.name} - already has Yelp URL")
@@ -320,7 +365,7 @@ def enrich_restaurant_with_yelp_url(restaurant: ScrapedRestaurant, delay: float 
         return False
     
     # Search for Yelp URL
-    yelp_url = find_yelp_url(restaurant_name, city, state, debug=False)
+    yelp_url = find_yelp_url(restaurant_name, city, state, debug=False, headless=headless)
     
     if yelp_url:
         # Save the URL
@@ -355,10 +400,12 @@ def enrich_all_restaurants(
     limit: Optional[int] = None,
     city_filter: Optional[str] = None,
     state_filter: Optional[str] = None,
-    delay: float = 2.0
+    delay: float = 2.0,
+    headless: bool = True
 ) -> Dict[str, int]:
     """
     Enrich all restaurants (or a filtered subset) with Yelp URLs.
+    Requires Django to be available.
     
     Args:
         source: Filter by source (e.g., 'google' for Google Maps restaurants)
@@ -370,6 +417,9 @@ def enrich_all_restaurants(
     Returns:
         Dictionary with statistics: {'processed': int, 'found': int, 'failed': int}
     """
+    if not DJANGO_AVAILABLE:
+        raise ImportError("Django is required for enrich_all_restaurants.")
+    
     # Query restaurants
     queryset = ScrapedRestaurant.objects.filter(is_active=True)
     
@@ -416,7 +466,7 @@ def enrich_all_restaurants(
         print(f"\n[{idx}/{total}] Processing: {restaurant.name} ({restaurant.city}, {restaurant.state})")
         
         try:
-            success = enrich_restaurant_with_yelp_url(restaurant, delay=delay)
+            success = enrich_restaurant_with_yelp_url(restaurant, delay=delay, headless=headless)
             stats['processed'] += 1
             
             if success:
@@ -486,8 +536,18 @@ def main():
         action='store_true',
         help='Test mode: process only one restaurant'
     )
+    parser.add_argument(
+        '--visible',
+        action='store_true',
+        help='Run browser in visible mode (not headless)'
+    )
     
     args = parser.parse_args()
+    
+    if not DJANGO_AVAILABLE:
+        print("ERROR: Django is required to run this script.")
+        print("This script requires Django models. Use find_yelp_url() function directly if you don't need Django.")
+        sys.exit(1)
     
     if args.test:
         # Test mode: process one restaurant
@@ -502,17 +562,20 @@ def main():
         
         if restaurant:
             print(f"Test mode: Processing {restaurant.name}")
-            enrich_restaurant_with_yelp_url(restaurant, delay=args.delay)
+            headless_mode = not args.visible
+            enrich_restaurant_with_yelp_url(restaurant, delay=args.delay, headless=headless_mode)
         else:
             print("No restaurant found for testing")
     else:
         # Process all matching restaurants
+        headless_mode = not args.visible
         enrich_all_restaurants(
             source=args.source,
             limit=args.limit,
             city_filter=args.city,
             state_filter=args.state,
-            delay=args.delay
+            delay=args.delay,
+            headless=headless_mode
         )
 
 

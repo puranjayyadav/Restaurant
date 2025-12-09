@@ -52,13 +52,19 @@ jobs:
           python -c "
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
           opts = Options()
-          opts.add_argument('--headless')
+          opts.add_argument('--headless=new')
           opts.add_argument('--no-sandbox')
           opts.add_argument('--disable-dev-shm-usage')
+          opts.add_argument('--disable-gpu')
+          opts.add_argument('--disable-software-rasterizer')
+          opts.add_argument('--window-size=1920,1080')
+          opts.add_argument('--single-process')
           opts.binary_location = '/usr/bin/chromium-browser'
           try:
-              d = webdriver.Chrome(options=opts)
+              service = Service()
+              d = webdriver.Chrome(service=service, options=opts)
               d.set_page_load_timeout(10)
               d.get('https://www.google.com')
               print('✓ ChromeDriver test successful!')
@@ -108,6 +114,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y chromium-browser chromium-chromedriver
           sudo ln -s /usr/bin/chromium-browser /usr/bin/chromium || true
+          # Ensure ChromeDriver is in PATH
+          sudo ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver || true
+          # Verify installations
+          chromium-browser --version
+          chromedriver --version
       
       - name: Install Python dependencies
         run: |

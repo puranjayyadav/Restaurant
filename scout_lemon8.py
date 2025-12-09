@@ -146,7 +146,7 @@ def setup_driver(brave_path=None):
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument('--headless')  # Run headless for automation
+    # options.add_argument('--headless')  # Temporarily disabled to see browser in action
     options.add_argument('--no-sandbox')  # Required for GitHub Actions
     options.add_argument('--disable-dev-shm-usage')  # Required for GitHub Actions
     
@@ -165,31 +165,68 @@ def setup_driver(brave_path=None):
         sys.stdout.flush()
         raise
 
-def auto_scroll(driver, scroll_pause_time=0.5, max_scrolls=50):
+def auto_scroll(driver, scroll_pause_time=0.5, max_scrolls=100):
     """Smoothly scroll down the page to load dynamic content"""
     last_height = driver.execute_script("return document.body.scrollHeight")
     scroll_count = 0
+    no_change_count = 0  # Track how many times height hasn't changed
     
     while scroll_count < max_scrolls:
-        driver.execute_script("window.scrollBy(0, 500);")
+        # Smooth incremental scroll
+        driver.execute_script("window.scrollBy({top: 300, behavior: 'smooth'});")
         scroll_count += 1
         time.sleep(scroll_pause_time)
         
+        # Wait a bit for content to load
+        time.sleep(0.3)
+        
         new_height = driver.execute_script("return document.body.scrollHeight")
+        current_position = driver.execute_script("return window.pageYOffset || window.scrollY || document.documentElement.scrollTop;")
+        
         if new_height == last_height:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1)
-            new_height = driver.execute_script("return document.body.scrollHeight")
+            no_change_count += 1
+            # If height hasn't changed for 3 consecutive checks, try scrolling a bit more
+            if no_change_count >= 3:
+                # Try scrolling a larger amount to trigger lazy loading
+                driver.execute_script("window.scrollBy({top: 1000, behavior: 'smooth'});")
+                time.sleep(1)  # Wait longer for content to load
+                new_height = driver.execute_script("return document.body.scrollHeight")
+                if new_height == last_height:
+                    # Still no change, might be at the end
+                    print(f"  No new content loaded after {scroll_count} scrolls, continuing...", flush=True)
+                    sys.stdout.flush()
+                    no_change_count = 0  # Reset counter
+        else:
+            no_change_count = 0  # Reset counter when new content loads
         
         last_height = new_height
         
         if scroll_count % 10 == 0:
-            print(f"  Scrolled {scroll_count} times...", flush=True)
+            print(f"  Scrolled {scroll_count} times (page height: {new_height}px, position: {int(current_position)}px)...", flush=True)
             sys.stdout.flush()
     
     return scroll_count
 
-def discover_article_urls(driver, seed_url, max_scrolls=50):
+def is_valid_article_url(url):
+    """
+    Check if URL is a valid article URL matching pattern: /@username/number?region=us
+    Excludes profile URLs (no number) and discover/search URLs
+    """
+    import re
+    if not url:
+        return False
+    
+    # Must contain /@username/number pattern
+    # Pattern: /@username/number?region=us
+    # Example: /@renieeerain/7549592081078141495?region=us
+    pattern = r'/@[^/]+/\d+\?region=us'
+    
+    if re.search(pattern, url):
+        return True
+    
+    return False
+
+def discover_article_urls(driver, seed_url, max_scrolls=100):
     """Discover article URLs from a seed URL"""
     print(f"\n🔍 Discovering URLs from: {seed_url}", flush=True)
     sys.stdout.flush()
@@ -213,6 +250,8 @@ def discover_article_urls(driver, seed_url, max_scrolls=50):
         
         print(f"  Extracting article links...", flush=True)
         sys.stdout.flush()
+        
+        # Method 1: Look for standard article cards
         article_cards = driver.find_elements(By.CSS_SELECTOR, "a.article-recommend-card")
         print(f"  Found {len(article_cards)} article cards", flush=True)
         sys.stdout.flush()
@@ -228,14 +267,77 @@ def discover_article_urls(driver, seed_url, max_scrolls=50):
                     else:
                         full_url = urljoin(base_url, "/" + href)
                     
-                    if full_url not in seen_links:
+                    # Only add valid article URLs (pattern: /@username/number?region=us)
+                    if is_valid_article_url(full_url) and full_url not in seen_links:
                         seen_links.add(full_url)
                         article_links.append(full_url)
             except Exception as e:
                 continue
         
+        # Method 2: Look for immersive article links (alternative page structure)
+        immersive_articles = driver.find_elements(By.CSS_SELECTOR, "a.discover-immersive-article")
+        print(f"  Found {len(immersive_articles)} immersive article links", flush=True)
+        sys.stdout.flush()
+        
+        for article in immersive_articles:
+            try:
+                href = article.get_attribute("href")
+                if href:
+                    if href.startswith("/"):
+                        full_url = urljoin(base_url, href)
+                    elif href.startswith("http"):
+                        full_url = href
+                    else:
+                        full_url = urljoin(base_url, "/" + href)
+                    
+                    # Only add valid article URLs (pattern: /@username/number?region=us)
+                    if is_valid_article_url(full_url) and full_url not in seen_links:
+                        seen_links.add(full_url)
+                        article_links.append(full_url)
+            except Exception as e:
+                continue
+        
+        # Method 3: Look for any links within the immersive-posts section
+        try:
+            immersive_section = driver.find_element(By.ID, "immersive-posts")
+            if immersive_section:
+                section_links = immersive_section.find_elements(By.TAG_NAME, "a")
+                print(f"  Found {len(section_links)} links in immersive-posts section", flush=True)
+                sys.stdout.flush()
+                
+                for link in section_links:
+                    try:
+                        href = link.get_attribute("href")
+                        if href:
+                            if href.startswith("/"):
+                                full_url = urljoin(base_url, href)
+                            elif href.startswith("http"):
+                                full_url = href
+                            else:
+                                continue  # Skip relative paths without leading /
+                            
+                            # Only add valid article URLs (pattern: /@username/number?region=us)
+                            if is_valid_article_url(full_url) and full_url not in seen_links:
+                                seen_links.add(full_url)
+                                article_links.append(full_url)
+                    except Exception as e:
+                        continue
+        except Exception as e:
+            # immersive-posts section might not exist on all pages
+            pass
+        
         print(f"  ✓ Discovered {len(article_links)} unique article URLs", flush=True)
         sys.stdout.flush()
+        
+        # Display discovered URLs (limit to first 20 to avoid overwhelming output)
+        if article_links:
+            print(f"\n  📋 Discovered URLs (showing first 20 of {len(article_links)}):", flush=True)
+            for i, url in enumerate(article_links[:20], 1):
+                print(f"    {i}. {url}", flush=True)
+            if len(article_links) > 20:
+                print(f"    ... and {len(article_links) - 20} more URLs", flush=True)
+            sys.stdout.flush()
+        
         return article_links
         
     except Exception as e:
@@ -355,6 +457,7 @@ def main():
         sys.exit(1)
     
     total_discovered = 0
+    all_discovered_urls = []  # Track all discovered URLs for final summary
     
     try:
         print(f"\n🚀 Starting to process {len(seed_urls)} seed URLs...", flush=True)
@@ -396,9 +499,12 @@ def main():
             sys.stdout.flush()
             
             # Discover URLs from this seed
-            urls = discover_article_urls(driver, seed_url, max_scrolls=50)
+            urls = discover_article_urls(driver, seed_url, max_scrolls=100)
             
             if urls:
+                # Track all discovered URLs
+                all_discovered_urls.extend(urls)
+                
                 # Extract hashtag from URL if possible
                 source_hashtag = None
                 if "hashtag" in seed_url or "experience" in seed_url:
@@ -426,6 +532,22 @@ def main():
         print(f"✓ Scout completed!", flush=True)
         print(f"  Total new URLs added to queue: {total_discovered}", flush=True)
         sys.stdout.flush()
+        
+        # Display comprehensive summary of all discovered URLs
+        if all_discovered_urls:
+            unique_urls = list(set(all_discovered_urls))
+            print(f"\n{'='*60}", flush=True)
+            print(f"📋 COMPREHENSIVE SUMMARY - All Discovered URLs", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  Total unique URLs discovered: {len(unique_urls)}", flush=True)
+            print(f"  Total URLs processed: {len(all_discovered_urls)}", flush=True)
+            print(f"\n  All discovered URLs:", flush=True)
+            for i, url in enumerate(unique_urls, 1):
+                print(f"    {i}. {url}", flush=True)
+            sys.stdout.flush()
+        else:
+            print(f"\n⚠ No URLs were discovered from any seed URL", flush=True)
+            sys.stdout.flush()
         
         # Show updated stats
         stats = get_queue_stats()

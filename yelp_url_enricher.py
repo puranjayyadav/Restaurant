@@ -49,6 +49,7 @@ except (ImportError, ModuleNotFoundError, Exception):
 def setup_chromium_driver(headless: bool = True):
     """
     Setup Selenium WebDriver with Chromium/Chrome.
+    Automatically detects CI environment and uses appropriate settings.
     
     Args:
         headless: Whether to run browser in headless mode
@@ -56,7 +57,14 @@ def setup_chromium_driver(headless: bool = True):
     Returns:
         WebDriver instance
     """
+    # Check if running in CI environment
+    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+    
     options = Options()
+    
+    # Set binary location for CI environments
+    if is_ci:
+        options.binary_location = "/usr/bin/chromium-browser"
     
     # Anti-detection measures
     options.add_argument('--disable-blink-features=AutomationControlled')
@@ -64,16 +72,39 @@ def setup_chromium_driver(headless: bool = True):
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    if headless:
-        options.add_argument('--headless')
-    
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
+    # CI-specific options (required for GitHub Actions)
+    if is_ci:
+        options.add_argument('--headless=new')  # Use new headless mode
+        options.add_argument('--no-sandbox')  # Required for GitHub Actions
+        options.add_argument('--disable-dev-shm-usage')  # Required for GitHub Actions
+        options.add_argument('--disable-gpu')  # Disable GPU in headless
+        options.add_argument('--disable-software-rasterizer')  # Disable software rasterizer
+        options.add_argument('--disable-extensions')  # Disable extensions
+        options.add_argument('--disable-background-timer-throttling')  # Disable background throttling
+        options.add_argument('--disable-backgrounding-occluded-windows')
+        options.add_argument('--disable-renderer-backgrounding')
+        options.add_argument('--disable-features=TranslateUI')
+        options.add_argument('--disable-ipc-flooding-protection')
+        options.add_argument('--window-size=1920,1080')  # Set window size for consistent rendering
+        options.add_argument('--single-process')  # Run in single process mode (helps with stability)
+    else:
+        # Local development
+        if headless:
+            options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
     
     try:
-        driver = webdriver.Chrome(options=options)
+        # In CI, explicitly set ChromeDriver service
+        if is_ci:
+            from selenium.webdriver.chrome.service import Service
+            service = Service()
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+        
         # Execute script to hide webdriver property
         driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
             'source': '''

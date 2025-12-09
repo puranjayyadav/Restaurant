@@ -34,7 +34,7 @@ except ImportError:
 print("Importing supabase_config...", flush=True)
 sys.stdout.flush()
 
-from supabase_config import add_urls_to_queue, get_queue_stats
+from supabase_config import add_urls_to_queue, get_queue_stats, is_seed_url_processed
 
 print("All imports successful", flush=True)
 sys.stdout.flush()
@@ -359,9 +359,27 @@ def main():
     try:
         print(f"\n🚀 Starting to process {len(seed_urls)} seed URLs...", flush=True)
         sys.stdout.flush()
-        for idx, seed_url in enumerate(seed_urls, 1):
+        
+        # Filter out already-processed seed URLs
+        unprocessed_seeds = []
+        for seed_url in seed_urls:
+            if is_seed_url_processed(seed_url):
+                print(f"⏭️  Skipping already-processed seed URL: {seed_url}", flush=True)
+                sys.stdout.flush()
+            else:
+                unprocessed_seeds.append(seed_url)
+        
+        print(f"\n📊 Found {len(unprocessed_seeds)} unprocessed seed URLs out of {len(seed_urls)} total", flush=True)
+        sys.stdout.flush()
+        
+        if not unprocessed_seeds:
+            print("\n✓ All seed URLs have already been processed!", flush=True)
+            sys.stdout.flush()
+            return
+        
+        for idx, seed_url in enumerate(unprocessed_seeds, 1):
             print(f"\n{'='*60}", flush=True)
-            print(f"Processing seed URL {idx}/{len(seed_urls)}: {seed_url}", flush=True)
+            print(f"Processing seed URL {idx}/{len(unprocessed_seeds)}: {seed_url}", flush=True)
             sys.stdout.flush()
             
             # Discover URLs from this seed

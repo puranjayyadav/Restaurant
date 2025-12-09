@@ -217,6 +217,26 @@ def get_failed_extractions(limit: int = None) -> List[Dict]:
         print(f"Error fetching failed extractions: {e}")
         return []
 
+def is_seed_url_processed(source_url: str) -> bool:
+    """Check if a seed URL has already been processed (has URLs in queue from this source)"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        result = supabase.table("crawl_queue")\
+            .select("url", count="exact")\
+            .eq("source_url", source_url)\
+            .limit(1)\
+            .execute()
+        
+        # If there are any URLs with this source_url, the seed has been processed
+        count = result.count if hasattr(result, 'count') else (len(result.data) if result.data else 0)
+        return count > 0
+    except Exception as e:
+        print(f"Error checking if seed URL is processed: {e}")
+        return False  # If we can't check, assume not processed to be safe
+
 def get_queue_stats() -> Dict:
     """Get statistics about the crawl queue"""
     supabase = get_supabase_client()

@@ -39,79 +39,91 @@ from supabase_config import add_urls_to_queue, get_queue_stats, is_seed_url_proc
 print("All imports successful", flush=True)
 sys.stdout.flush()
 
-def get_nyc_seed_urls():
+def get_nj_gold_coast_seed_urls():
     """
-    Generate high-value NYC seed URLs using Neighborhood + Intent strategy.
-    This creates targeted search URLs that Lemon8 users actually use.
+    Generate high-value seed URLs for the NJ Gold Coast (Hoboken/JC).
+    Updated to include trending micro-neighborhoods and correct state suffixes.
     """
-    # 1. Primary Locations (The "Hot" spots)
+    # 1. Primary Locations (Expanded)
     neighborhoods = [
-        # Manhattan (Downtown)
-        "SoHo", "West Village", "East Village", "Lower East Side", "Chinatown",
-        "Tribeca", "Nolita", "Greenwich Village", "NoHo", "Financial District",
-        # Manhattan (Mid/Uptown)
-        "Chelsea", "Flatiron", "Nomad", "Hell's Kitchen", "Upper West Side",
-        "Upper East Side", "Harlem", "Washington Heights",
-        # Brooklyn (The "Cool" Belt)
-        "Williamsburg", "Greenpoint", "Bushwick", "DUMBO", "Brooklyn Heights",
-        "Cobble Hill", "Carroll Gardens", "Fort Greene", "Bed-Stuy", "Park Slope",
-        # Queens (Foodie Hubs)
-        "Astoria", "Long Island City", "Jackson Heights", "Flushing", "Ridgewood",
+        # Hoboken Areas
+        "Hoboken",
+        "Downtown Hoboken",
+        "Uptown Hoboken",
+        "Waterfront Hoboken",
+        "Washington Street Hoboken",
+        
+        # Jersey City Macro
+        "Jersey City",
+        "Downtown Jersey City",
+        "Jersey City Heights",      # <--- NEW (Trending)
+        "Bergen-Lafayette",         # <--- NEW (Up-and-coming)
+        
+        # Jersey City Micro
+        "Newport Jersey City",
+        "Paulus Hook",
+        "Grove Street Jersey City", # <--- NEW (Restaurant Row)
+        "Exchange Place",           # <--- NEW (Rooftops/Views)
+        "Liberty State Park",       # <--- NEW (Outdoors)
+        
+        # Neighbors
+        "Weehawken",                # <--- NEW (Best Skyline Views)
+        "Union City"                # <--- NEW (Cheap Eats/Latino Food)
     ]
     
-    # 2. High-Intent Keywords
+    # 2. High-Intent Keywords (Added specific cuisines for this area)
     intents = [
+        # General
         "food guide", "best restaurants", "hidden gems", "itinerary",
         "things to do", "date night", "coffee shops", "thrift stores",
+        
+        # Vibe / Specifics
         "photo spots", "weekend guide", "cheap eats", "solo date",
         "speakeasy", "rooftop bars", "sample sales", "brunch spots",
         "dessert places", "pizza", "bagels", "sushi", "pasta", "tacos",
+        
+        # Aesthetic
         "aesthetic places", "instagrammable", "non touristy",
-        "girls night", "luxury", "budget friendly"
+        "girls night", "luxury", "budget friendly",
+        
+        # Local Specialties (Added)
+        "skyline views", "indian food", "cuban food", "italian delis"
     ]
     
-    # 3. "Mega" Keywords (Broad searches that return high volume)
+    # 3. "Mega" Keywords (Optimized)
     mega_keywords = [
-        "NYC itinerary 3 days",
-        "NYC aesthetic places",
-        "New York non touristy things to do",
-        "NYC food bucket list",
-        "NYC weekend recap",
-        "NYC rainy day activities",
-        "Best photo spots NYC",
-        "NYC hidden gems",
-        "NYC date night ideas",
-        "NYC solo date ideas"
+        "Hoboken itinerary",
+        "Jersey City food guide",
+        "Best views of NYC from NJ",  # <--- High value search
+        "Hoboken hidden gems",
+        "Jersey City Heights guide",
+        "Hoboken date night ideas",
+        "Jersey City speakeasy",
+        "Hoboken rooftop",
+        "Weekend in Jersey City",
     ]
     
     # Generate the URLs
     base_url = "https://www.lemon8-app.com/discover/"
     all_urls = []
     
-    # A. Neighborhood + Intent Combinations (e.g., "SoHo NYC hidden gems")
+    # A. Neighborhood + Intent Combinations
     for hood in neighborhoods:
         for intent in intents:
-            query = f"{hood} NYC {intent}"  # Adding "NYC" helps disambiguate
+            # FIX: Use "NJ" instead of "NYC" for these specific queries
+            query = f"{hood} NJ {intent}" 
             encoded = quote(query)
             all_urls.append(f"{base_url}{encoded}?region=us")
     
-    # B. Mega Keywords (standalone high-volume searches)
+    # B. Mega Keywords
     for keyword in mega_keywords:
         encoded = quote(keyword)
         all_urls.append(f"{base_url}{encoded}?region=us")
     
-    # C. Keep some experience/hashtag URLs for variety
-    experience_urls = [
-        "https://www.lemon8-app.com/experience/new-york-eat?region=us",
-        "https://www.lemon8-app.com/experience/new-york-travel?region=us",
-        "https://www.lemon8-app.com/experience/new-york-lifestyle?region=us",
-    ]
-    all_urls.extend(experience_urls)
-    
     return all_urls
 
 # Default seed URLs - generated dynamically using NYC strategy
-DEFAULT_SEED_URLS = get_nyc_seed_urls()
+DEFAULT_SEED_URLS = get_nj_gold_coast_seed_urls()
 
 def find_brave_path():
     """Find Brave browser executable"""
@@ -135,6 +147,8 @@ def setup_driver(brave_path=None):
     is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
     
     options = Options()
+    # Force headless everywhere for stability/CI parity
+    options.add_argument('--headless=new')
     
     # Use Brave if available, otherwise use system Chrome (for GitHub Actions)
     if brave_path and os.path.exists(brave_path):
@@ -168,10 +182,9 @@ def setup_driver(brave_path=None):
         options.add_argument('--window-size=1920,1080')  # Set window size for consistent rendering
         options.add_argument('--single-process')  # Run in single process mode (helps with stability)
     else:
-        # Local development - headless optional
-        # options.add_argument('--headless')  # Uncomment if you want headless locally
-        options.add_argument('--no-sandbox')  # Still useful locally
-        options.add_argument('--disable-dev-shm-usage')  # Still useful locally
+        # Local development - keep aligned with CI
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
     
     print("Creating WebDriver instance...", flush=True)
     sys.stdout.flush()

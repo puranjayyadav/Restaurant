@@ -39,68 +39,59 @@ from supabase_config import add_urls_to_queue, get_queue_stats, is_seed_url_proc
 print("All imports successful", flush=True)
 sys.stdout.flush()
 
-def get_nj_gold_coast_seed_urls():
+def get_chicago_seed_urls():
     """
-    Generate high-value seed URLs for the NJ Gold Coast (Hoboken/JC).
-    Updated to include trending micro-neighborhoods and correct state suffixes.
+    Generate high-value seed URLs for Chicago.
+    Targeting specific 'vibe' neighborhoods and suppressing generic tourist traps.
     """
-    # 1. Primary Locations (Expanded)
+    # 1. Primary Locations (The "Vibe" Map)
     neighborhoods = [
-        # Hoboken Areas
-        "Hoboken",
-        "Downtown Hoboken",
-        "Uptown Hoboken",
-        "Waterfront Hoboken",
-        "Washington Street Hoboken",
+        # The "It" Neighborhoods (High Density of Reels)
+        "West Loop Chicago",       # The Foodie Capital (Au Cheval, Nobu)
+        "Fulton Market",           # Specific street/district within West Loop
+        "River North Chicago",     # Nightlife & upscale dining
+        "Gold Coast Chicago",      # Luxury, historic, "Old Money" aesthetic
         
-        # Jersey City Macro
-        "Jersey City",
-        "Downtown Jersey City",
-        "Jersey City Heights",      # <--- NEW (Trending)
-        "Bergen-Lafayette",         # <--- NEW (Up-and-coming)
+        # The "Aesthetic/Local" Neighborhoods
+        "Lincoln Park Chicago",    # Leafy, upscale, zoo, brownstones
+        "Wicker Park",             # Hipster, vintage, coffee shops
+        "Logan Square",            # Trendy, bars, younger crowd
+        "Bucktown",                # upscale hipster, boutique shopping
+        "West Town",               # Up-and-coming, eclectic
         
-        # Jersey City Micro
-        "Newport Jersey City",
-        "Paulus Hook",
-        "Grove Street Jersey City", # <--- NEW (Restaurant Row)
-        "Exchange Place",           # <--- NEW (Rooftops/Views)
-        "Liberty State Park",       # <--- NEW (Outdoors)
-        
-        # Neighbors
-        "Weehawken",                # <--- NEW (Best Skyline Views)
-        "Union City"                # <--- NEW (Cheap Eats/Latino Food)
+        # Micro-Neighborhoods & Streets
+        "The 606 Trail",           # Chicago's version of the High Line
+        "Magnificent Mile",        # Shopping (Selective)
+        "Chicago Riverwalk",       # High engagement for views
+        "Randolph Street",         # "Restaurant Row"
     ]
     
-    # 2. High-Intent Keywords (Added specific cuisines for this area)
+    # 2. High-Intent Keywords (Chicago Specifics)
     intents = [
-        # General
-        "food guide", "best restaurants", "hidden gems", "itinerary",
-        "things to do", "date night", "coffee shops", "thrift stores",
+        # Food Specifics
+        "best deep dish", "tavern style pizza", "italian beef", 
+        "steakhouse", "speakeasy", "omakase", "brunch spots",
+        "chicago style hot dog", "late night food",
         
-        # Vibe / Specifics
-        "photo spots", "weekend guide", "cheap eats", "solo date",
-        "speakeasy", "rooftop bars", "sample sales", "brunch spots",
-        "dessert places", "pizza", "bagels", "sushi", "pasta", "tacos",
-        
-        # Aesthetic
-        "aesthetic places", "instagrammable", "non touristy",
-        "girls night", "luxury", "budget friendly",
-        
-        # Local Specialties (Added)
-        "skyline views", "indian food", "cuban food", "italian delis"
+        # Vibe Specifics
+        "rooftop bars", "skyline views", "architecture tour",
+        "date night", "girls trip itinerary", "solo date",
+        "hidden gems", "instagrammable places", "jazz club",
+        "blues bar", "thrift stores", "coffee aesthetic"
     ]
     
-    # 3. "Mega" Keywords (Optimized)
+    # 3. "Mega" Keywords (The Viral Search Terms)
     mega_keywords = [
-        "Hoboken itinerary",
-        "Jersey City food guide",
-        "Best views of NYC from NJ",  # <--- High value search
-        "Hoboken hidden gems",
-        "Jersey City Heights guide",
-        "Hoboken date night ideas",
-        "Jersey City speakeasy",
-        "Hoboken rooftop",
-        "Weekend in Jersey City",
+        "Chicago weekend itinerary",
+        "West Loop food guide",
+        "Best speakeasies in Chicago",
+        "Lincoln Park hidden gems",
+        "Chicago riverwalk restaurants",
+        "Emily in Paris Chicago spots", # Viral trend referencing French restaurants
+        "Wicker Park vintage crawl",
+        "Romantic restaurants Chicago with view",
+        "3 days in Chicago guide",
+        "Chicago christmas market" # Seasonal but huge traffic
     ]
     
     # Generate the URLs
@@ -111,7 +102,7 @@ def get_nj_gold_coast_seed_urls():
     for hood in neighborhoods:
         for intent in intents:
             # FIX: Use "NJ" instead of "NYC" for these specific queries
-            query = f"{hood} NJ {intent}" 
+            query = f"{hood} {intent}" 
             encoded = quote(query)
             all_urls.append(f"{base_url}{encoded}?region=us")
     
@@ -123,7 +114,7 @@ def get_nj_gold_coast_seed_urls():
     return all_urls
 
 # Default seed URLs - generated dynamically using NYC strategy
-DEFAULT_SEED_URLS = get_nj_gold_coast_seed_urls()
+DEFAULT_SEED_URLS = get_chicago_seed_urls()
 
 def find_brave_path():
     """Find Brave browser executable"""

@@ -35,7 +35,7 @@ RULES:
 
 4. CONTEXT: Extract specific recommendations (what to order, vibe, tips) from the surrounding <p> tags.
 
-5. SEARCH QUERY: You MUST generate a 'search_query' field for each stop. Format: "{Place Name} {Neighborhood} {City}". If City is unknown, default to "Hoboken".
+5. SEARCH QUERY: You MUST generate a 'search_query' field for each stop. Format: "{Place Name} {Neighborhood} {City}". If City is unknown, default to "Chicago".
 
 6. OUTPUT: Return ONLY valid JSON. Do not include markdown formatting (```json), explanations, or conversational filler.
 

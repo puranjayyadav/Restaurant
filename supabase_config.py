@@ -3,6 +3,12 @@ import os
 from supabase import create_client, Client
 from typing import List, Dict, Optional
 import time
+import requests
+from io import BytesIO
+from urllib.parse import urlparse
+import hashlib
+import unicodedata
+import re
 
 # Try to load from .env file if available
 try:
@@ -11,16 +17,29 @@ try:
 except ImportError:
     pass  # dotenv not required if using environment variables directly
 
-# Supabase configuration - set these as environment variables
-# Re-read from environment each time to ensure we get the latest values
+# Supabase configuration - set these as environment variables.
+# Re-read from environment each time to ensure we get the latest values.
 def get_supabase_credentials():
-    """Get Supabase credentials from environment variables"""
-    url = os.getenv("SUPABASE_URL", "")
-    key = os.getenv("SUPABASE_KEY", "")
-    # Strip whitespace and newlines (common issue with GitHub Secrets)
-    url = url.strip() if url else ""
-    key = key.strip() if key else ""
-    return url, key
+    """Get Supabase credentials from environment variables."""
+    url = os.getenv("SUPABASE_URL", "") or ""
+
+    # Accept multiple env var names for the key to avoid CI misconfiguration.
+    candidates = [
+        os.getenv("SUPABASE_SERVICE_KEY", ""),
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+        os.getenv("SUPABASE_KEY", ""),
+        os.getenv("SUPABASE_ANON_KEY", ""),
+    ]
+
+    # Strip whitespace/newlines (common with GitHub secrets)
+    candidates = [c.strip() for c in candidates if c]
+    key = ""
+    for candidate in candidates:
+        if candidate:
+            key = candidate
+            break
+
+    return url.strip(), key
 
 def get_supabase_client() -> Optional[Client]:
     """Create and return Supabase client"""
@@ -374,3 +393,400 @@ def mark_article_yelp_scouted(article_url: str) -> bool:
     except Exception as e:
         print(f"Error marking article as Yelp-scouted: {e}")
         return False
+
+
+def save_yelp_restaurant_to_db(restaurant_data: Dict) -> bool:
+    """Save scraped Yelp restaurant data to yelp_restaurants table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        # Prepare data for Supabase (ensure proper types)
+        db_data = {
+            "yelp_id": restaurant_data.get("yelp_id"),
+            "source": restaurant_data.get("source", "yelp"),
+            "source_id": restaurant_data.get("source_id"),
+            "source_url": restaurant_data.get("source_url"),
+            "url": restaurant_data.get("url"),
+            "name": restaurant_data.get("name"),
+            "description": restaurant_data.get("description"),
+            "address": restaurant_data.get("address"),
+            "city": restaurant_data.get("city"),
+            "state": restaurant_data.get("state"),
+            "rating": restaurant_data.get("rating"),
+            "total_reviews": restaurant_data.get("total_reviews"),
+            "review_count": restaurant_data.get("review_count"),
+            "price_range": restaurant_data.get("price_range"),
+            "phone": restaurant_data.get("phone"),
+            "website": restaurant_data.get("website"),
+            "hours": restaurant_data.get("hours"),
+            "categories": restaurant_data.get("categories", []),
+            "cuisine": restaurant_data.get("cuisine"),
+            "photos": restaurant_data.get("photos", []),
+            "images": restaurant_data.get("images", []),
+            "image_urls": restaurant_data.get("image_urls", []),
+            "menu_items": restaurant_data.get("menu_items", []),
+            "popular_dishes": restaurant_data.get("popular_dishes", []),
+            "reviews": restaurant_data.get("reviews", []),
+            "menu_link": restaurant_data.get("menu_link"),
+            "amenities": restaurant_data.get("amenities", []),
+            "location": restaurant_data.get("location"),
+            "lemon8_source": restaurant_data.get("lemon8_source"),
+            "scraped_at": restaurant_data.get("scraped_at")
+        }
+        
+        # Upsert (insert or update)
+        supabase.table("yelp_restaurants")\
+            .upsert(db_data)\
+            .execute()
+        
+        return True
+    except Exception as e:
+        print(f"Error saving Yelp restaurant to database: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def get_existing_scraped_yelp_ids() -> set:
+    """Get all existing Yelp IDs from yelp_restaurants table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return set()
+    
+    try:
+        result = supabase.table("yelp_restaurants")\
+            .select("yelp_id")\
+            .execute()
+        
+        yelp_ids = set()
+        if result.data:
+            for row in result.data:
+                yelp_id = row.get("yelp_id")
+                if yelp_id:
+                    yelp_ids.add(yelp_id)
+        
+        return yelp_ids
+    except Exception as e:
+        print(f"⚠️  Error loading existing scraped data: {e}", flush=True)
+        return set()
+
+
+def get_all_yelp_urls_from_queue(limit: Optional[int] = None) -> List[Dict]:
+    """Get all Yelp URLs from crawl_queue_yelp table (all statuses)"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return []
+    
+    try:
+        query = supabase.table("crawl_queue_yelp")\
+            .select("*")\
+            .order("discovered_at", desc=False)
+        
+        if limit:
+            query = query.limit(limit)
+        
+        result = query.execute()
+        return result.data if result.data else []
+    except Exception as e:
+        print(f"Error getting all Yelp URLs from queue: {e}", flush=True)
+        return []
+
+
+def get_pending_yelp_urls(limit: Optional[int] = None) -> List[Dict]:
+    """Get pending Yelp URLs from crawl_queue_yelp table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return []
+    
+    try:
+        query = supabase.table("crawl_queue_yelp")\
+            .select("*")\
+            .eq("status", "pending")\
+            .order("discovered_at", desc=False)
+        
+        if limit:
+            query = query.limit(limit)
+        
+        result = query.execute()
+        return result.data if result.data else []
+    except Exception as e:
+        print(f"Error getting pending Yelp URLs: {e}", flush=True)
+        return []
+
+
+def mark_yelp_url_processing(yelp_id: str) -> bool:
+    """Mark Yelp URL as processing in crawl_queue_yelp table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        supabase.table("crawl_queue_yelp")\
+            .update({
+                "status": "processing",
+                "processed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            })\
+            .eq("yelp_id", yelp_id)\
+            .execute()
+        return True
+    except Exception as e:
+        print(f"Error marking Yelp URL as processing: {e}", flush=True)
+        return False
+
+
+def mark_yelp_url_completed(yelp_id: str) -> bool:
+    """Mark Yelp URL as completed in crawl_queue_yelp table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        supabase.table("crawl_queue_yelp")\
+            .update({
+                "status": "completed",
+                "processed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            })\
+            .eq("yelp_id", yelp_id)\
+            .execute()
+        return True
+    except Exception as e:
+        print(f"Error marking Yelp URL as completed: {e}", flush=True)
+        return False
+
+
+def mark_yelp_url_failed(yelp_id: str, error_message: str = None) -> bool:
+    """Mark Yelp URL as failed in crawl_queue_yelp table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return False
+    
+    try:
+        update_data = {
+            "status": "failed",
+            "processed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        if error_message:
+            update_data["error_message"] = error_message
+        
+        supabase.table("crawl_queue_yelp")\
+            .update(update_data)\
+            .eq("yelp_id", yelp_id)\
+            .execute()
+        return True
+    except Exception as e:
+        print(f"Error marking Yelp URL as failed: {e}", flush=True)
+        return False
+
+
+def get_yelp_queue_stats() -> Dict:
+    """Get statistics for crawl_queue_yelp table"""
+    supabase = get_supabase_client()
+    if not supabase:
+        return {}
+    
+    try:
+        pending = supabase.table("crawl_queue_yelp")\
+            .select("yelp_id", count="exact")\
+            .eq("status", "pending")\
+            .execute()
+        
+        processing = supabase.table("crawl_queue_yelp")\
+            .select("yelp_id", count="exact")\
+            .eq("status", "processing")\
+            .execute()
+        
+        completed = supabase.table("crawl_queue_yelp")\
+            .select("yelp_id", count="exact")\
+            .eq("status", "completed")\
+            .execute()
+        
+        failed = supabase.table("crawl_queue_yelp")\
+            .select("yelp_id", count="exact")\
+            .eq("status", "failed")\
+            .execute()
+        
+        return {
+            "pending": pending.count if hasattr(pending, 'count') else len(pending.data) if pending.data else 0,
+            "processing": processing.count if hasattr(processing, 'count') else len(processing.data) if processing.data else 0,
+            "completed": completed.count if hasattr(completed, 'count') else len(completed.data) if completed.data else 0,
+            "failed": failed.count if hasattr(failed, 'count') else len(failed.data) if failed.data else 0,
+        }
+    except Exception as e:
+        print(f"Error getting Yelp queue stats: {e}", flush=True)
+        return {}
+
+
+def sanitize_storage_key(key: str) -> str:
+    """
+    Sanitize a string to be used as a Supabase Storage key.
+    Supabase Storage keys must be URL-safe and cannot contain special Unicode characters.
+    """
+    if not key:
+        return key
+    
+    # Normalize Unicode characters (NFD = decomposed form, then remove combining marks)
+    # This converts characters like "ō" to "o"
+    normalized = unicodedata.normalize('NFD', key)
+    # Remove combining characters (accents, diacritics)
+    ascii_key = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
+    
+    # Replace spaces with hyphens
+    ascii_key = ascii_key.replace(' ', '-')
+    
+    # Remove or replace invalid characters (keep only alphanumeric, hyphens, underscores, dots, forward slashes)
+    # Supabase Storage allows: a-z, A-Z, 0-9, -, _, ., /
+    ascii_key = re.sub(r'[^a-zA-Z0-9\-_./]', '', ascii_key)
+    
+    # Remove consecutive hyphens/underscores
+    ascii_key = re.sub(r'[-_]{2,}', '-', ascii_key)
+    
+    # Remove leading/trailing hyphens and underscores
+    ascii_key = ascii_key.strip('-_')
+    
+    return ascii_key
+
+
+def upload_image_to_storage(image_url: str, bucket_name: str = "restaurant-images", 
+                           folder: str = "yelp", yelp_id: str = None) -> Optional[str]:
+    """
+    Download an image from URL and upload to Supabase Storage.
+    Returns the public URL of the uploaded image, or None if failed.
+    """
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+    
+    try:
+        # Download image
+        response = requests.get(image_url, timeout=30, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.yelp.com/',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+        })
+        response.raise_for_status()
+        
+        # Generate filename from URL
+        parsed_url = urlparse(image_url)
+        filename = parsed_url.path.split('/')[-1]
+        if not filename or '.' not in filename:
+            # Generate filename from hash if no extension
+            filename = hashlib.md5(image_url.encode()).hexdigest() + '.jpg'
+        
+        # Clean filename (remove query params if any)
+        if '?' in filename:
+            filename = filename.split('?')[0]
+        
+        # Sanitize filename and yelp_id for storage keys
+        filename = sanitize_storage_key(filename)
+        sanitized_yelp_id = sanitize_storage_key(yelp_id) if yelp_id else None
+        
+        # Create storage path: folder/yelp_id/filename or folder/filename
+        if sanitized_yelp_id:
+            storage_path = f"{folder}/{sanitized_yelp_id}/{filename}"
+        else:
+            storage_path = f"{folder}/{filename}"
+        
+        # Upload to Supabase Storage
+        file_data = BytesIO(response.content)
+        content_type = response.headers.get('content-type', 'image/jpeg')
+        
+        # Check if file already exists (optional - can skip if you want to overwrite)
+        try:
+            existing = supabase.storage.from_(bucket_name).list(storage_path)
+            if existing:
+                # File exists, get public URL
+                public_url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+                return public_url
+        except:
+            pass  # File doesn't exist, continue with upload
+        
+        result = supabase.storage.from_(bucket_name).upload(
+            storage_path,
+            file_data.read(),
+            file_options={"content-type": content_type, "upsert": "true"}
+        )
+        
+        # Get public URL
+        public_url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+        return public_url
+        
+    except Exception as e:
+        print(f"⚠️  Error uploading image {image_url}: {e}", flush=True)
+        return None
+
+
+def upload_local_image_to_storage(local_path: str, bucket_name: str = "restaurant-images",
+                                 folder: str = "yelp", yelp_id: str = None) -> Optional[str]:
+    """
+    Upload a local image file to Supabase Storage.
+    Returns the public URL of the uploaded image, or None if failed.
+    """
+    supabase = get_supabase_client()
+    if not supabase:
+        return None
+    
+    if not os.path.exists(local_path):
+        print(f"⚠️  Local file not found: {local_path}", flush=True)
+        return None
+    
+    try:
+        # Get filename from local path
+        filename = os.path.basename(local_path)
+        
+        # Sanitize filename and yelp_id for storage keys
+        filename = sanitize_storage_key(filename)
+        sanitized_yelp_id = sanitize_storage_key(yelp_id) if yelp_id else None
+        
+        # Create storage path: folder/yelp_id/filename or folder/filename
+        if sanitized_yelp_id:
+            storage_path = f"{folder}/{sanitized_yelp_id}/{filename}"
+        else:
+            storage_path = f"{folder}/{filename}"
+        
+        # Read file
+        with open(local_path, 'rb') as f:
+            file_data = f.read()
+        
+        # Determine content type
+        ext = os.path.splitext(filename)[1].lower()
+        content_type_map = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp'
+        }
+        content_type = content_type_map.get(ext, 'image/webp')  # Default to webp for optimized images
+        
+        # Upload to Supabase Storage
+        result = supabase.storage.from_(bucket_name).upload(
+            storage_path,
+            file_data,
+            file_options={"content-type": content_type, "upsert": "true"}
+        )
+        
+        # Get public URL
+        public_url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+        return public_url
+        
+    except Exception as e:
+        print(f"⚠️  Error uploading local image {local_path}: {e}", flush=True)
+        return None
+
+
+def upload_images_batch(image_urls: List[str], bucket_name: str = "restaurant-images",
+                        folder: str = "yelp", yelp_id: str = None) -> List[str]:
+    """
+    Upload multiple images from URLs and return list of public URLs.
+    """
+    uploaded_urls = []
+    for image_url in image_urls:
+        if not image_url:
+            continue
+        public_url = upload_image_to_storage(image_url, bucket_name, folder, yelp_id)
+        if public_url:
+            uploaded_urls.append(public_url)
+    return uploaded_urls

@@ -156,7 +156,18 @@ def enrich_simple_stops(stops: List[Dict[str, Any]], itinerary_title: str = "Iti
 def main():
     parser = argparse.ArgumentParser(description="Enrich cloneable_adventures stops with solver tags.")
     parser.add_argument("--limit", type=int, default=100, help="Rows to process (batch size)")
-    parser.add_argument("--offset", type=int, default=0, help="Offset for pagination (start row)")
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=None,
+        help="Explicit offset for pagination (overrides batch-index if set)",
+    )
+    parser.add_argument(
+        "--batch-index",
+        type=int,
+        default=0,
+        help="Batch index where offset = batch-index * limit (useful for scheduled runs)",
+    )
     parser.add_argument("--force", action="store_true", help="Recompute even if solver_data exists")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Supabase")
     parser.add_argument("--table", type=str, default="cloneable_adventures", help="Supabase table name")
@@ -174,7 +185,9 @@ def main():
     if not supabase:
         raise SystemExit("Supabase client not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY.")
 
-    print(f"[INFO] Fetching up to {args.limit} rows from {args.table} (offset {args.offset})…")
+    effective_offset = args.offset if args.offset is not None else args.batch_index * args.limit
+
+    print(f"[INFO] Fetching up to {args.limit} rows from {args.table} (offset {effective_offset})…")
     select_cols = [args.pk_field, args.stops_field]
     if args.title_field and args.title_field.lower() != "none":
         select_cols.append(args.title_field)
@@ -187,7 +200,7 @@ def main():
         supabase.table(args.table)
         .select(",".join(select_cols))
         .order(args.pk_field, desc=False)
-        .range(args.offset, args.offset + args.limit - 1)
+        .range(effective_offset, effective_offset + args.limit - 1)
         .execute()
     )
     rows = res.data or []

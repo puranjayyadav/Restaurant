@@ -2,33 +2,56 @@
 Sample geocoder:
 - `yelp_restaurants` (location == null)
 - `res_backend_scrapedrestaurant` (latitude/longitude == null)
-- NEW: first 3 `lemon8_articles` enriched_itinerary_data stops (geocode search_query)
-for records with a non-null address, using OpenStreetMap Nominatim (no API key).
-Intended for quick sanity checks/backfill.
+- `lemon8_articles` enriched_itinerary_data stops (geocode search_query)
 
-Prereqs:
-- Env vars: SUPABASE_URL, SUPABASE_KEY (service role recommended)
-- Dependencies: supabase-py, requests (already in requirements), google_maps_scraper module in repo
-
-Usage:
-    python backfill_yelp_locations_sample.py
+Uses OpenStreetMap Nominatim (Free, requires polite usage).
 """
 
 import os
 import time
+import re
 from typing import Dict, Any, List, Optional
 
 import requests
 from supabase_config import get_supabase_client
 
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))  # rows per table per run
-SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1.1"))  # respect Nominatim 1s throttle
-NOMINATIM_EMAIL = os.getenv("NOMINATIM_EMAIL", "").strip()  # optional, polite UA
+# --- Configuration ---
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))
+SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1.1"))  # Critical for Nominatim
+NOMINATIM_EMAIL = os.getenv("NOMINATIM_EMAIL", "").strip()
 LEMON8_LIMIT = int(os.getenv("LEMON8_LIMIT", "100"))
 
 
+def clean_search_term(name: str) -> str:
+    """
+    Aggressive cleaning to fix 'HOJOKBAN NYC', 'Lido Harlem Restaurant', 'Hani's +'.
+    Removes specific noise words that confuse strict geocoders.
+    """
+    if not name:
+        return ""
+
+    # 1. Remove special separators and replace with space
+    # Matches |, +, -, :, and multiple spaces
+    name = re.sub(r'[|+\-:]', ' ', name)
+
+    # 2. Strip common location suffixes and generic noise (Case Insensitive)
+    # Be careful not to strip words that might be the *actual* name (like "New York Pizza")
+    # providing they appear at the end or as distinct tokens.
+    noise_patterns = [
+        r'\bNYC\b', r'\bNew York\b', r'\bNY\b',
+        r'\bK-Town\b', r'\bHarlem\b', r'\bSoho\b', r'\bManhattan\b',
+        r'\bRestaurant\b', r'\bCafe\b', r'\bBakery\b', r'\bBar\b'
+    ]
+
+    clean = name
+    for pattern in noise_patterns:
+        clean = re.sub(pattern, '', clean, flags=re.IGNORECASE)
+
+    return clean.strip()
+
+
 def build_query(row: Dict[str, Any]) -> str:
-    """Construct a search string from available fields."""
+    """Construct a search string for Yelp/Scraped tables."""
     parts: List[str] = [
         row.get("name") or "",
         row.get("address") or "",
@@ -41,8 +64,6 @@ def build_query(row: Dict[str, Any]) -> str:
 def search_place_by_name(query: str, max_retries: int = 2) -> Optional[Dict[str, Any]]:
     """
     Geocode a place using OpenStreetMap Nominatim.
-
-    Returns dict with lat, lon, display_name or None.
     """
     if not query:
         return None
@@ -62,10 +83,14 @@ def search_place_by_name(query: str, max_retries: int = 2) -> Optional[Dict[str,
             )
             if resp.status_code != 200:
                 print(f"WARN: Nominatim {resp.status_code} for '{query}'")
+                if resp.status_code == 429:  # Rate limit hit
+                    time.sleep(5)
                 continue
+
             data = resp.json()
             if not data:
                 return None
+
             top = data[0]
             return {
                 "lat": float(top.get("lat")),
@@ -80,13 +105,11 @@ def search_place_by_name(query: str, max_retries: int = 2) -> Optional[Dict[str,
 
 def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
     """
-    Geocode stops in lemon8_articles.enriched_itinerary_data for the first `limit` rows.
-    Stores lat/lng arrays in separate columns (stops_lat, stops_lng) and also injects
-    lat/lng into each stop inside enriched_itinerary_data.
+    Geocode stops in lemon8_articles using robust fallback logic.
     """
     supabase = get_supabase_client()
     if not supabase:
-        print("ERROR: Supabase client not available. Set SUPABASE_URL and SUPABASE_KEY.")
+        print("ERROR: Supabase client not available.")
         return
 
     articles = (
@@ -103,16 +126,17 @@ def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
 
     for article in articles:
         url = article.get("url")
-        raw_data = article.get("enriched_itinerary_data") or {}
-        if isinstance(raw_data, list):
-            data = raw_data[0] if raw_data and isinstance(raw_data[0], dict) else {}
+        # Handle data structure variants (list vs dict)
+        raw_data = article.get("enriched_itinerary_data")
+        if isinstance(raw_data, list) and raw_data:
+            data = raw_data[0]
         elif isinstance(raw_data, dict):
             data = raw_data
         else:
             data = {}
 
-        city = data.get("city") or ""
-        stops = data.get("stops") or []
+        city = data.get("city") or "New York"  # Default to NYC if missing for context
+        stops = data.get("stops")
         if not isinstance(stops, list):
             stops = []
 
@@ -122,25 +146,32 @@ def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
 
         for stop in stops:
             place_name = (stop.get("place_name") or "").strip()
-            # Primary: clean "Name, City" (strip symbols that hurt matching)
-            clean_name = place_name.replace("+", " ").replace("|", " ").strip()
-            simple_query = f"{clean_name}, {city}".strip().strip(",")
 
-            # Secondary: original search_query if present
-            noisy_query = (stop.get("search_query") or "").strip()
+            # --- STRATEGY 1: Cleaned Name + City (Highest Confidence) ---
+            clean_name = clean_search_term(place_name)
+            query_clean = f"{clean_name}, {city}".strip().strip(",")
 
-            # Tertiary: just place name
-            fallback_query = place_name
+            # --- STRATEGY 2: Original Search Query (Fallback) ---
+            query_original = (stop.get("search_query") or "").strip()
+
+            # --- STRATEGY 3: Raw Place Name (Last Resort) ---
+            query_raw = place_name
 
             result = None
-            for candidate in [simple_query, noisy_query, fallback_query]:
-                if candidate:
-                    result = search_place_by_name(candidate)
-                if result and result.get("lat") and result.get("lon"):
+            used_query = None
+            for candidate in [query_clean, query_original, query_raw]:
+                if not candidate:
+                    continue
+                if len(candidate) < 3:
+                    continue
+
+                result = search_place_by_name(candidate)
+                used_query = candidate
+                if result:
                     break
 
-            lat = float(result["lat"]) if result and result.get("lat") else None
-            lng = float(result["lon"]) if result and result.get("lon") else None
+            lat = result["lat"] if result else None
+            lng = result["lon"] if result else None
 
             updated_stop = dict(stop)
             updated_stop["lat"] = lat
@@ -150,35 +181,29 @@ def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
             stops_lng.append(lng)
             updated_stops.append(updated_stop)
 
-            if lat and lng:
-                print(f"OK: {stop.get('place_name')} -> ({lat}, {lng})")
+            safe_name = place_name.encode('ascii', 'ignore').decode()
+            if lat:
+                print(f"   [OK] {safe_name} -> ({lat:.5f}, {lng:.5f}) [Via: {used_query}]")
             else:
-                print(f"WARN: No geocode for '{simple_query}'")
+                print(f"   [FAIL] {safe_name} | Tried: '{query_clean}'")
 
             time.sleep(SLEEP_SECONDS)
 
-        updated_data = dict(data)
-        updated_data["stops"] = updated_stops
+        if stops:
+            updated_data = dict(data)
+            updated_data["stops"] = updated_stops
 
-        payload = {
-            "enriched_itinerary_data": updated_data,
-            "stops_lat": stops_lat,
-            "stops_lng": stops_lng,
-        }
+            payload = {
+                "enriched_itinerary_data": updated_data,
+                "stops_lat": stops_lat,
+                "stops_lng": stops_lng,
+            }
 
-        try:
-            supabase.table("lemon8_articles").update(payload).eq("url", url).execute()
-            print(f"UPDATED article {url} with {len(updated_stops)} stops")
-        except Exception as exc:
-            print(f"WARN: Failed to update stops_lat/stops_lng for {url}: {exc}")
-            # Fallback: at least persist enriched_itinerary_data with lat/lng inside stops
             try:
-                supabase.table("lemon8_articles").update(
-                    {"enriched_itinerary_data": updated_data}
-                ).eq("url", url).execute()
-                print(f"UPDATED enriched_itinerary_data only for {url}")
-            except Exception as exc2:
-                print(f"ERROR: Failed to update article {url}: {exc2}")
+                supabase.table("lemon8_articles").update(payload).eq("url", url).execute()
+                print(f"--> SAVED article {url[-20:]}...")
+            except Exception as exc:
+                print(f"ERR: Save failed for {url}: {exc}")
 
 
 def main():
@@ -187,9 +212,10 @@ def main():
         print("ERROR: Supabase client not available. Set SUPABASE_URL and SUPABASE_KEY.")
         return
 
-    # Geocode enriched itineraries (default via env LEMON8_LIMIT, default 100)
+    # 1. Run Lemon8 Geocoder
     geocode_lemon8_articles()
 
+    # 2. Run Yelp Geocoder
     rows = (
         supabase.table("yelp_restaurants")
         .select("yelp_id,name,address,city,state")
@@ -199,26 +225,20 @@ def main():
         .execute()
         .data
     )
-
-    print(f"Fetched {len(rows)} rows needing geocode")
-
+    print(f"\nFetched {len(rows)} Yelp rows needing geocode")
     for row in rows:
         query = build_query(row)
-        if not query:
-            print(f"Skipping id={row.get('id')} (no query fields)")
-            continue
-
         info = search_place_by_name(query)
-        if info and info.get("lat") and info.get("lon"):
-            loc = {"lat": float(info["lat"]), "lng": float(info["lon"])}
+
+        if info:
+            loc = {"lat": info["lat"], "lng": info["lon"]}
             supabase.table("yelp_restaurants").update({"location": loc}).eq("yelp_id", row["yelp_id"]).execute()
-            print(f"OK: Updated {row.get('name')} -> {loc}")
+            print(f"   [YELP] Updated {row.get('name')}")
         else:
-            print(f"WARN: No geocode for yelp_id={row.get('yelp_id')} name={row.get('name')} query='{query}'")
-
+            print(f"   [YELP] Failed {row.get('name')}")
         time.sleep(SLEEP_SECONDS)
 
-    # ---------- res_backend_scrapedrestaurant ----------
+    # 3. Run Scraped Restaurants Geocoder
     scraped_rows = (
         supabase.table("res_backend_scrapedrestaurant")
         .select("id,name,address,street_address,city,state")
@@ -230,73 +250,25 @@ def main():
         .execute()
         .data
     )
-
-    print(f"Fetched {len(scraped_rows)} scraped rows needing geocode")
-
+    print(f"\nFetched {len(scraped_rows)} Scraped rows needing geocode")
     for row in scraped_rows:
-        parts: List[str] = [
-            row.get("name") or "",
-            row.get("street_address") or "",
-            row.get("address") or "",
-            row.get("city") or "",
-            row.get("state") or "",
+        parts = [
+            row.get("name"),
+            row.get("street_address"),
+            row.get("city"),
+            row.get("state")
         ]
-        query = " ".join(p.strip() for p in parts if p and p.strip())
-
-        if not query:
-            print(f"Skipping scraped id={row.get('id')} (no query fields)")
-            continue
+        query = " ".join([p.strip() for p in parts if p and p.strip()])
 
         info = search_place_by_name(query)
-        if info and info.get("lat") and info.get("lon"):
-            loc = {"latitude": float(info["lat"]), "longitude": float(info["lon"])}
+        if info:
+            loc = {"latitude": info["lat"], "longitude": info["lon"]}
             supabase.table("res_backend_scrapedrestaurant").update(loc).eq("id", row["id"]).execute()
-            print(f"OK: Updated scraped {row.get('name')} -> {loc}")
+            print(f"   [SCRAPED] Updated {row.get('name')}")
         else:
-            print(f"WARN: No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
-
-        time.sleep(SLEEP_SECONDS)
-
-    # ---------- res_backend_scrapedrestaurant ----------
-    scraped_rows = (
-        supabase.table("res_backend_scrapedrestaurant")
-        .select("id,name,address,street_address,city,state")
-        .is_("latitude", "null")
-        .not_.is_("address", "null")
-        .eq("is_active", True)
-        .is_("duplicate_of_id", "null")
-        .limit(BATCH_SIZE)
-        .execute()
-        .data
-    )
-
-    print(f"Fetched {len(scraped_rows)} scraped rows needing geocode")
-
-    for row in scraped_rows:
-        parts: List[str] = [
-            row.get("name") or "",
-            row.get("street_address") or "",
-            row.get("address") or "",
-            row.get("city") or "",
-            row.get("state") or "",
-        ]
-        query = " ".join(p.strip() for p in parts if p and p.strip())
-
-        if not query:
-            print(f"Skipping scraped id={row.get('id')} (no query fields)")
-            continue
-
-        info = search_place_by_name(query)
-        if info and info.get("lat") and info.get("lon"):
-            loc = {"latitude": float(info["lat"]), "longitude": float(info["lon"])}
-            supabase.table("res_backend_scrapedrestaurant").update(loc).eq("id", row["id"]).execute()
-            print(f"OK: Updated scraped {row.get('name')} -> {loc}")
-        else:
-            print(f"WARN: No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
-
+            print(f"   [SCRAPED] Failed {row.get('name')}")
         time.sleep(SLEEP_SECONDS)
 
 
 if __name__ == "__main__":
     main()
-

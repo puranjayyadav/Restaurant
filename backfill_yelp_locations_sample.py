@@ -22,7 +22,7 @@ import requests
 from supabase_config import get_supabase_client
 
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))  # rows per table per run
-SLEEP_SECONDS = 0.5       # be gentle to avoid blocks
+SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1.1"))  # respect Nominatim 1s throttle
 NOMINATIM_EMAIL = os.getenv("NOMINATIM_EMAIL", "").strip()  # optional, polite UA
 LEMON8_LIMIT = int(os.getenv("LEMON8_LIMIT", "100"))
 
@@ -121,8 +121,23 @@ def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
         updated_stops: List[Dict[str, Any]] = []
 
         for stop in stops:
-            query = stop.get("search_query") or f"{stop.get('place_name', '')} {city}".strip()
-            result = search_place_by_name(query) if query else None
+            place_name = (stop.get("place_name") or "").strip()
+            # Primary: clean "Name, City" (strip symbols that hurt matching)
+            clean_name = place_name.replace("+", " ").replace("|", " ").strip()
+            simple_query = f"{clean_name}, {city}".strip().strip(",")
+
+            # Secondary: original search_query if present
+            noisy_query = (stop.get("search_query") or "").strip()
+
+            # Tertiary: just place name
+            fallback_query = place_name
+
+            result = None
+            for candidate in [simple_query, noisy_query, fallback_query]:
+                if candidate:
+                    result = search_place_by_name(candidate)
+                if result and result.get("lat") and result.get("lon"):
+                    break
 
             lat = float(result["lat"]) if result and result.get("lat") else None
             lng = float(result["lon"]) if result and result.get("lon") else None
@@ -138,7 +153,7 @@ def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
             if lat and lng:
                 print(f"OK: {stop.get('place_name')} -> ({lat}, {lng})")
             else:
-                print(f"WARN: No geocode for '{query}'")
+                print(f"WARN: No geocode for '{simple_query}'")
 
             time.sleep(SLEEP_SECONDS)
 

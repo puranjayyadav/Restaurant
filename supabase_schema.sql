@@ -23,6 +23,9 @@ create table if not exists lemon8_articles (
   url text primary key,
   html_content text,
   itinerary_data jsonb,
+  enriched_itinerary_data jsonb,
+  stops_lat double precision[],
+  stops_lng double precision[],
   scraped_at timestamp default now(),
   extracted_at timestamp,
   extraction_error text,
@@ -68,3 +71,54 @@ create table if not exists crawl_queue_yelp (
 create index if not exists idx_yelp_queue_status on crawl_queue_yelp(status);
 create index if not exists idx_yelp_queue_discovered on crawl_queue_yelp(discovered_at);
 create index if not exists idx_yelp_queue_city on crawl_queue_yelp(city);
+
+-- Yelp Restaurants table to store scraped restaurant data
+create table if not exists yelp_restaurants (
+  yelp_id text primary key,
+  source text default 'yelp',
+  source_id text,
+  source_url text,
+  url text not null,
+  name text,
+  description text,
+  address text,
+  city text,
+  state text,
+  rating numeric,
+  total_reviews integer,
+  review_count integer,
+  price_range text,
+  phone text,
+  website text,
+  hours jsonb,
+  categories text[],
+  cuisine text,
+  photos text[],
+  images text[],
+  image_urls text[],
+  supabase_photos text[],  -- Supabase Storage URLs
+  supabase_image_urls text[],  -- Supabase Storage URLs (alias)
+  supabase_images text[],  -- Supabase Storage URLs (alias)
+  header_image_url text,  -- Best header image URL (selected by HeaderSelector)
+  menu_items jsonb,
+  popular_dishes jsonb,
+  reviews jsonb,
+  menu_link text,
+  amenities text[],
+  location jsonb,
+  lemon8_source jsonb,
+  scraped_at timestamp default now(),
+  created_at timestamp default now(),
+  updated_at timestamp default now()
+);
+
+-- Index for searching
+create index if not exists idx_yelp_restaurants_city on yelp_restaurants(city);
+create index if not exists idx_yelp_restaurants_rating on yelp_restaurants(rating);
+create index if not exists idx_yelp_restaurants_scraped on yelp_restaurants(scraped_at);
+
+-- Trigger to auto-update updated_at
+create trigger update_yelp_restaurants_updated_at
+  before update on yelp_restaurants
+  for each row
+  execute function update_updated_at_column();

@@ -1,8 +1,9 @@
 """
-Sample geocoder: updates up to 10 rows in each of:
+Sample geocoder:
 - `yelp_restaurants` (location == null)
 - `res_backend_scrapedrestaurant` (latitude/longitude == null)
-for records with a non-null address, using google_maps_scraper (no API key).
+- NEW: first 3 `lemon8_articles` enriched_itinerary_data stops (geocode search_query)
+for records with a non-null address, using OpenStreetMap Nominatim (no API key).
 Intended for quick sanity checks/backfill.
 
 Prereqs:
@@ -15,13 +16,15 @@ Usage:
 
 import os
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
+import requests
 from supabase_config import get_supabase_client
-from google_maps_scraper import search_place_by_name
 
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))  # rows per table per run
 SLEEP_SECONDS = 0.5       # be gentle to avoid blocks
+NOMINATIM_EMAIL = os.getenv("NOMINATIM_EMAIL", "").strip()  # optional, polite UA
+LEMON8_LIMIT = int(os.getenv("LEMON8_LIMIT", "100"))
 
 
 def build_query(row: Dict[str, Any]) -> str:
@@ -35,11 +38,142 @@ def build_query(row: Dict[str, Any]) -> str:
     return " ".join(p.strip() for p in parts if p and p.strip())
 
 
+def search_place_by_name(query: str, max_retries: int = 2) -> Optional[Dict[str, Any]]:
+    """
+    Geocode a place using OpenStreetMap Nominatim.
+
+    Returns dict with lat, lon, display_name or None.
+    """
+    if not query:
+        return None
+
+    headers = {
+        "User-Agent": f"res-geocode/1.0 ({NOMINATIM_EMAIL})" if NOMINATIM_EMAIL else "res-geocode/1.0"
+    }
+    params = {"q": query, "format": "json", "limit": 1}
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                print(f"WARN: Nominatim {resp.status_code} for '{query}'")
+                continue
+            data = resp.json()
+            if not data:
+                return None
+            top = data[0]
+            return {
+                "lat": float(top.get("lat")),
+                "lon": float(top.get("lon")),
+                "display_name": top.get("display_name"),
+            }
+        except Exception as exc:
+            print(f"WARN: Nominatim error for '{query}': {exc}")
+            time.sleep(1.0)
+    return None
+
+
+def geocode_lemon8_articles(limit: int = LEMON8_LIMIT):
+    """
+    Geocode stops in lemon8_articles.enriched_itinerary_data for the first `limit` rows.
+    Stores lat/lng arrays in separate columns (stops_lat, stops_lng) and also injects
+    lat/lng into each stop inside enriched_itinerary_data.
+    """
+    supabase = get_supabase_client()
+    if not supabase:
+        print("ERROR: Supabase client not available. Set SUPABASE_URL and SUPABASE_KEY.")
+        return
+
+    articles = (
+        supabase.table("lemon8_articles")
+        .select("url, enriched_itinerary_data")
+        .not_.is_("enriched_itinerary_data", "null")
+        .order("created_at", desc=False)
+        .limit(limit)
+        .execute()
+        .data
+    )
+
+    print(f"Fetched {len(articles)} lemon8 articles for geocoding")
+
+    for article in articles:
+        url = article.get("url")
+        raw_data = article.get("enriched_itinerary_data") or {}
+        if isinstance(raw_data, list):
+            data = raw_data[0] if raw_data and isinstance(raw_data[0], dict) else {}
+        elif isinstance(raw_data, dict):
+            data = raw_data
+        else:
+            data = {}
+
+        city = data.get("city") or ""
+        stops = data.get("stops") or []
+        if not isinstance(stops, list):
+            stops = []
+
+        stops_lat: List[Optional[float]] = []
+        stops_lng: List[Optional[float]] = []
+        updated_stops: List[Dict[str, Any]] = []
+
+        for stop in stops:
+            query = stop.get("search_query") or f"{stop.get('place_name', '')} {city}".strip()
+            result = search_place_by_name(query) if query else None
+
+            lat = float(result["lat"]) if result and result.get("lat") else None
+            lng = float(result["lon"]) if result and result.get("lon") else None
+
+            updated_stop = dict(stop)
+            updated_stop["lat"] = lat
+            updated_stop["lng"] = lng
+
+            stops_lat.append(lat)
+            stops_lng.append(lng)
+            updated_stops.append(updated_stop)
+
+            if lat and lng:
+                print(f"OK: {stop.get('place_name')} -> ({lat}, {lng})")
+            else:
+                print(f"WARN: No geocode for '{query}'")
+
+            time.sleep(SLEEP_SECONDS)
+
+        updated_data = dict(data)
+        updated_data["stops"] = updated_stops
+
+        payload = {
+            "enriched_itinerary_data": updated_data,
+            "stops_lat": stops_lat,
+            "stops_lng": stops_lng,
+        }
+
+        try:
+            supabase.table("lemon8_articles").update(payload).eq("url", url).execute()
+            print(f"UPDATED article {url} with {len(updated_stops)} stops")
+        except Exception as exc:
+            print(f"WARN: Failed to update stops_lat/stops_lng for {url}: {exc}")
+            # Fallback: at least persist enriched_itinerary_data with lat/lng inside stops
+            try:
+                supabase.table("lemon8_articles").update(
+                    {"enriched_itinerary_data": updated_data}
+                ).eq("url", url).execute()
+                print(f"UPDATED enriched_itinerary_data only for {url}")
+            except Exception as exc2:
+                print(f"ERROR: Failed to update article {url}: {exc2}")
+
+
 def main():
     supabase = get_supabase_client()
     if not supabase:
-        print("❌ Supabase client not available. Set SUPABASE_URL and SUPABASE_KEY.")
+        print("ERROR: Supabase client not available. Set SUPABASE_URL and SUPABASE_KEY.")
         return
+
+    # Geocode enriched itineraries (default via env LEMON8_LIMIT, default 100)
+    geocode_lemon8_articles()
 
     rows = (
         supabase.table("yelp_restaurants")
@@ -63,9 +197,9 @@ def main():
         if info and info.get("lat") and info.get("lon"):
             loc = {"lat": float(info["lat"]), "lng": float(info["lon"])}
             supabase.table("yelp_restaurants").update({"location": loc}).eq("yelp_id", row["yelp_id"]).execute()
-            print(f"✅ Updated {row.get('name')} -> {loc}")
+            print(f"OK: Updated {row.get('name')} -> {loc}")
         else:
-            print(f"⚠️  No geocode for yelp_id={row.get('yelp_id')} name={row.get('name')} query='{query}'")
+            print(f"WARN: No geocode for yelp_id={row.get('yelp_id')} name={row.get('name')} query='{query}'")
 
         time.sleep(SLEEP_SECONDS)
 
@@ -102,9 +236,9 @@ def main():
         if info and info.get("lat") and info.get("lon"):
             loc = {"latitude": float(info["lat"]), "longitude": float(info["lon"])}
             supabase.table("res_backend_scrapedrestaurant").update(loc).eq("id", row["id"]).execute()
-            print(f"✅ Updated scraped {row.get('name')} -> {loc}")
+            print(f"OK: Updated scraped {row.get('name')} -> {loc}")
         else:
-            print(f"⚠️  No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
+            print(f"WARN: No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
 
         time.sleep(SLEEP_SECONDS)
 
@@ -141,9 +275,9 @@ def main():
         if info and info.get("lat") and info.get("lon"):
             loc = {"latitude": float(info["lat"]), "longitude": float(info["lon"])}
             supabase.table("res_backend_scrapedrestaurant").update(loc).eq("id", row["id"]).execute()
-            print(f"✅ Updated scraped {row.get('name')} -> {loc}")
+            print(f"OK: Updated scraped {row.get('name')} -> {loc}")
         else:
-            print(f"⚠️  No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
+            print(f"WARN: No geocode for scraped id={row.get('id')} name={row.get('name')} query='{query}'")
 
         time.sleep(SLEEP_SECONDS)
 

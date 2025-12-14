@@ -2,7 +2,7 @@ name: Backfill Geocode (Supabase)
 
 on:
   schedule:
-    - cron: "0 */3 * * *" # every 3 hours
+    - cron: "*/30 * * * *" # every 30 minutes
   workflow_dispatch:
 
 permissions:
@@ -34,6 +34,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           BATCH_SIZE: "100"
+          LEMON8_LIMIT: "100"
         run: |
           python backfill_yelp_locations_sample.py
 

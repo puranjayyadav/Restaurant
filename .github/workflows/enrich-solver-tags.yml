@@ -3,7 +3,7 @@ name: Enrich Solver Tags
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # every 6 hours
+    - cron: "*/30 * * * *" # every 30 minutes
 
 jobs:
   enrich:

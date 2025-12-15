@@ -24,7 +24,7 @@ from .utils import (
     filter_directional_places, get_time_context_query, get_time_context_label
 )
 from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
-from .nba_solver import NBASolver
+from .nba_solver import NBASolver, DynamicItinerarySolver
 import uuid
 import json
 
@@ -3422,10 +3422,22 @@ def next_best_action(request):
             places=places,
             user_preferences=None  # TODO: Add user preferences support
         )
+
+        # Generate rolling chain (simulated future steps)
+        chain_steps = int(data.get('steps', 4) or 4)
+        chain_solver = DynamicItinerarySolver()
+        rolling_chain = chain_solver.generate_rolling_itinerary(
+            user_location=(latitude, longitude),
+            heading=float(heading) if heading is not None else None,
+            current_time=current_time,
+            places=places,
+            steps=chain_steps
+        )
         
         response_time_ms = int((time.time() - start_time) * 1000)
         result['cache_hit'] = cache_hit
         result['response_time_ms'] = response_time_ms
+        result['rolling_chain'] = rolling_chain
         
         return Response(result, status=status.HTTP_200_OK)
         

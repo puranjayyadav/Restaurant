@@ -3,7 +3,7 @@ Next Best Action (NBA) Solver for real-time recommendations.
 Implements rolling horizon approach - returns only the next 2 steps instead of full itinerary.
 """
 
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 from datetime import datetime, timedelta
 import math
 from .utils import (
@@ -403,6 +403,9 @@ class NBASolver:
             "rating": place.get('rating') or place.get('avg_rating'),
             "types": place.get('types') or place.get('categories') or [],
             "address": place.get('formatted_address') or place.get('address') or place.get('full_address') or '',
+            # Keep raw coordinates so rolling simulations can re-anchor
+            "lat": place_lat,
+            "lng": place_lon,
         }
     
     def _bearing_to_cardinal(self, bearing: float) -> str:
@@ -410,4 +413,102 @@ class NBASolver:
         cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
         index = int((bearing + 22.5) / 45.0) % 8
         return cardinals[index]
+
+
+class DynamicItinerarySolver(NBASolver):
+    """
+    Rolling-chain itinerary solver.
+    Simulates future steps by advancing time/location after each recommended stop.
+    """
+
+    DWELL_TIMES = {
+        'coffee': 30,
+        'cafe': 45,
+        'bakery': 20,
+        'park': 45,
+        'museum': 90,
+        'shopping': 60,
+        'lunch': 60,
+        'dinner': 90,
+        'bar': 60,
+        'general': 60,
+    }
+
+    def generate_rolling_itinerary(
+        self,
+        user_location: Tuple[float, float],
+        heading: Optional[float],
+        current_time: datetime,
+        places: List[Dict],
+        steps: int = 4
+    ) -> List[Dict]:
+        """
+        Generate a multi-step chain (A -> B -> C) using simulated future states.
+        """
+        itinerary: List[Dict] = []
+        sim_location = user_location
+        sim_heading = heading
+        sim_time = current_time
+        used_place_ids: Set[str] = set()
+
+        for i in range(max(1, steps)):
+            # Filter out already visited
+            available_places = [
+                p for p in places
+                if (p.get('place_id') or p.get('name')) not in used_place_ids
+            ]
+            if not available_places:
+                break
+
+            step_result = self.solve_next_action(
+                user_location=sim_location,
+                heading=sim_heading,
+                current_time=sim_time,
+                places=available_places,
+                user_preferences=None
+            )
+            best_stop = step_result.get('next_stop')
+            if not best_stop:
+                break
+
+            # Enrich with chain metadata
+            best_stop = best_stop.copy()
+            best_stop['step_sequence'] = i + 1
+            best_stop['visit_context'] = get_time_context_label(sim_time.hour)
+            best_stop['simulated_arrival'] = best_stop.get('estimated_arrival')
+            itinerary.append(best_stop)
+
+            # Update simulation state
+            place_lat, place_lon = self._extract_coordinates(best_stop)
+            if place_lat is None:
+                break
+
+            distance_m = best_stop.get('distance_m') or 0
+            travel_minutes = self._estimate_travel_minutes(distance_m)
+            dwell_minutes = self.DWELL_TIMES.get(self._infer_category(best_stop), 60)
+            sim_time = sim_time + timedelta(minutes=travel_minutes + dwell_minutes)
+            sim_location = (place_lat, place_lon)
+            sim_heading = None  # allow 360° after first hop
+
+            place_id = best_stop.get('place_id') or best_stop.get('name')
+            if place_id:
+                used_place_ids.add(place_id)
+
+        return itinerary
+
+    def _estimate_travel_minutes(self, distance_m: float) -> int:
+        """Estimate walking travel minutes given distance (meters)."""
+        walking_speed_ms = 1.39  # ~5 km/h
+        seconds = distance_m / walking_speed_ms if distance_m else 0
+        return max(5, int(round(seconds / 60.0)))
+
+    def _infer_category(self, stop: Dict) -> str:
+        """Infer a coarse category from types for dwell-time lookup."""
+        types = stop.get('types') or []
+        for t in types:
+            lower_t = str(t).lower()
+            for key in self.DWELL_TIMES.keys():
+                if key in lower_t:
+                    return key
+        return 'general'
 

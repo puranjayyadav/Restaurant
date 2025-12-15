@@ -15,10 +15,18 @@ from .serializers import (
 )
 from django.db.models import Q
 from math import radians, cos, sin, asin, sqrt
+import math
+from typing import List, Dict
 from django.shortcuts import get_object_or_404
 from .recommendation import RestaurantRecommender
-from .utils import match_restaurant_with_postgres, enrich_restaurant_data
+from .utils import (
+    match_restaurant_with_postgres, enrich_restaurant_data,
+    filter_directional_places, get_time_context_query, get_time_context_label
+)
+from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
+from .nba_solver import NBASolver
 import uuid
+import json
 
 # Initialize Firebase app (if not already initialized)
 # Supports both environment variable (Railway) and file path (local dev)
@@ -3300,5 +3308,132 @@ def get_pre_created_itinerary_detail(request, itinerary_id):
         print(f"DEBUG: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to get itinerary detail: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def next_best_action(request):
+    """
+    Next Best Action (NBA) endpoint for real-time recommendations.
+    
+    Returns only the next 2 steps (next stop + backup) instead of full itinerary.
+    Uses caching, directional filtering, and time-context to provide fast responses.
+    
+    Request body:
+    {
+        "latitude": 40.7306,
+        "longitude": -73.9352,
+        "heading": 0.0,  // degrees (0-360, North=0), optional
+        "timestamp": "2024-01-15T13:15:00Z"  // ISO format, optional (defaults to now)
+    }
+    
+    Response:
+    {
+        "next_stop": {...},
+        "backup_stop": {...},
+        "context": "lunch",
+        "confidence": 0.85,
+        "cache_hit": true,
+        "response_time_ms": 45
+    }
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
+        
+        latitude = float(data.get('latitude'))
+        longitude = float(data.get('longitude'))
+        heading = data.get('heading')  # Optional
+        timestamp_str = data.get('timestamp')
+        
+        # Parse timestamp or use now
+        if timestamp_str:
+            from datetime import datetime
+            current_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            if current_time.tzinfo is None:
+                from django.utils import timezone
+                current_time = timezone.now()
+        else:
+            from django.utils import timezone
+            current_time = timezone.now()
+        
+        # Calculate geohash and time context
+        geohash = get_geohash(latitude, longitude, precision=7)
+        time_context = get_time_context_label(current_time.hour)
+        query_context = time_context
+        
+        # Check cache first
+        cached_places = get_cached_places(geohash, query_context) or []
+
+        def _has_coords(place: dict) -> bool:
+            def _is_number(val):
+                return val is not None
+
+            if 'lat' in place and ('lng' in place or 'long' in place):
+                return _is_number(place.get('lat')) and _is_number(place.get('lng') or place.get('long'))
+            if 'geometry' in place and 'location' in place['geometry']:
+                loc = place['geometry']['location'] or {}
+                return _is_number(loc.get('lat')) and _is_number(loc.get('lng') or loc.get('long'))
+            return False
+
+        valid_places = [p for p in cached_places if _has_coords(p)]
+        cache_hit = bool(valid_places)
+        
+        if cache_hit:
+            places = valid_places
+            print(f"DEBUG: NBA cache HIT for {geohash}/{query_context} (valid={len(places)}, raw={len(cached_places)})")
+        else:
+            # Cache miss or empty/invalid cache - need to scrape (slow) so return hint
+            print(f"DEBUG: NBA cache MISS/EMPTY for {geohash}/{query_context} (raw_count={len(cached_places)})")
+            return Response({
+                "next_stop": None,
+                "backup_stop": None,
+                "context": time_context,
+                "confidence": 0.0,
+                "cache_hit": False,
+                "response_time_ms": int((time.time() - start_time) * 1000),
+                "message": "No cached data available. Please use /api/get_personalized_recommendations/ to trigger scraping first."
+            }, status=status.HTTP_200_OK)
+        
+        # Apply directional filter if heading provided
+        if heading is not None:
+            filtered_places = filter_directional_places(
+                places,
+                (latitude, longitude),
+                float(heading),
+                cone_angle=120
+            )
+            # If directional filter wipes out results, fall back to original list
+            if filtered_places:
+                places = filtered_places
+            else:
+                print("DEBUG: Directional filter returned 0 places; using unfiltered set")
+        
+        # Solve for next best action
+        solver = NBASolver()
+        result = solver.solve_next_action(
+            user_location=(latitude, longitude),
+            heading=float(heading) if heading is not None else None,
+            current_time=current_time,
+            places=places,
+            user_preferences=None  # TODO: Add user preferences support
+        )
+        
+        response_time_ms = int((time.time() - start_time) * 1000)
+        result['cache_hit'] = cache_hit
+        result['response_time_ms'] = response_time_ms
+        
+        return Response(result, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: NBA endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to get next best action: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

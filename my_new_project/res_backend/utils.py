@@ -5,6 +5,7 @@ from .models import ScrapedRestaurant
 import math
 from django.db.models import Q
 from math import radians, cos
+from typing import List, Dict, Tuple, Optional, Any
 
 # Try to import fuzzywuzzy, fallback to simple string matching if not available
 try:
@@ -764,4 +765,222 @@ def optimize_route(restaurants, center_lat, center_lng, max_distance_between=1.0
             break
     
     return route
+
+
+# ============================================================================
+# Directional Search (Cone of Interest) Functions
+# ============================================================================
+
+def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculate bearing (direction) from point 1 to point 2 in degrees.
+    
+    Args:
+        lat1, lon1: Starting point coordinates
+        lat2, lon2: Destination point coordinates
+    
+    Returns:
+        Bearing in degrees (0-360, where 0 = North, 90 = East, 180 = South, 270 = West)
+    """
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lon = math.radians(lon2 - lon1)
+    
+    y = math.sin(delta_lon) * math.cos(lat2_rad)
+    x = (math.cos(lat1_rad) * math.sin(lat2_rad) - 
+         math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon))
+    
+    bearing = math.atan2(y, x)
+    bearing_degrees = math.degrees(bearing)
+    
+    # Normalize to 0-360
+    return (bearing_degrees + 360) % 360
+
+
+def is_in_forward_cone(user_lat: float, user_lon: float, heading: float, 
+                       place_lat: float, place_lon: float, cone_angle: int = 120) -> bool:
+    """
+    Check if a place is within the forward cone of the user's heading.
+    
+    Args:
+        user_lat, user_lon: User's current location
+        heading: User's heading in degrees (0-360, North=0)
+        place_lat, place_lon: Place coordinates to check
+        cone_angle: Cone angle in degrees (default 120 = 60° on each side)
+    
+    Returns:
+        True if place is in forward cone, False otherwise
+    """
+    # Calculate bearing from user to place
+    bearing_to_place = calculate_bearing(user_lat, user_lon, place_lat, place_lon)
+    
+    # Calculate angular difference
+    angle_diff = abs(bearing_to_place - heading)
+    
+    # Handle wrap-around (e.g., heading=350, bearing=10 should be 20°, not 340°)
+    if angle_diff > 180:
+        angle_diff = 360 - angle_diff
+    
+    # Check if within cone (half angle on each side)
+    half_cone = cone_angle / 2.0
+    return angle_diff <= half_cone
+
+
+def filter_directional_places(places: List[Dict], user_location: Tuple[float, float], 
+                              heading: Optional[float], cone_angle: int = 120) -> List[Dict]:
+    """
+    Filter places to only those in the forward cone of user's heading.
+    
+    Args:
+        places: List of place dictionaries with 'lat'/'lng' or 'geometry.location.lat'/'lng'
+        user_location: (lat, lon) tuple of user's location
+        heading: User's heading in degrees (None to skip filtering)
+        cone_angle: Cone angle in degrees (default 120)
+    
+    Returns:
+        Filtered list of places within forward cone, sorted by forward distance
+    """
+    if heading is None:
+        return places
+    
+    user_lat, user_lon = user_location
+    filtered = []
+    
+    for place in places:
+        # Extract coordinates
+        if 'lat' in place and 'lng' in place:
+            place_lat = float(place['lat'])
+            place_lon = float(place['lng'])
+        elif 'geometry' in place and 'location' in place['geometry']:
+            place_lat = float(place['geometry']['location']['lat'])
+            place_lon = float(place['geometry']['location']['lng'])
+        else:
+            continue  # Skip places without coordinates
+        
+        if is_in_forward_cone(user_lat, user_lon, heading, place_lat, place_lon, cone_angle):
+            # Calculate forward distance (projection along heading direction)
+            bearing_to_place = calculate_bearing(user_lat, user_lon, place_lat, place_lon)
+            angle_diff = abs(bearing_to_place - heading)
+            if angle_diff > 180:
+                angle_diff = 360 - angle_diff
+            
+            # Calculate actual distance
+            distance_m = haversine_distance(user_lat, user_lon, place_lat, place_lon)
+            
+            # Forward distance = distance * cos(angle_diff) - penalize places off heading
+            forward_distance = distance_m * math.cos(math.radians(angle_diff))
+            
+            # Add forward_distance to place for sorting
+            place_copy = place.copy()
+            place_copy['_forward_distance'] = forward_distance
+            place_copy['_bearing'] = bearing_to_place
+            filtered.append(place_copy)
+    
+    # Sort by forward distance (closer along heading = better)
+    filtered.sort(key=lambda p: p.get('_forward_distance', float('inf')))
+    
+    return filtered
+
+
+# ============================================================================
+# Time-Context Query Filter Functions
+# ============================================================================
+
+def get_time_context_query(current_hour: int) -> List[str]:
+    """
+    Get query keywords based on current time of day.
+    
+    Args:
+        current_hour: Current hour (0-23)
+    
+    Returns:
+        List of query keywords for scraping
+    """
+    if 8 <= current_hour < 11:
+        # Morning: 8:00 AM - 11:00 AM
+        return ["coffee", "breakfast", "cafe", "bakery", "park"]
+    elif 11 <= current_hour < 12:
+        # Late morning: 11:00 AM - 12:00 PM
+        return ["brunch", "cafe", "restaurant"]
+    elif 12 <= current_hour < 14:
+        # Lunch: 12:00 PM - 2:00 PM
+        return ["lunch", "restaurant", "fast casual", "food"]
+    elif 14 <= current_hour < 17:
+        # Afternoon: 2:00 PM - 5:00 PM
+        return ["museum", "art_gallery", "park", "shopping_mall", "cafe"]
+    elif 17 <= current_hour < 21:
+        # Dinner: 5:00 PM - 9:00 PM
+        return ["restaurant", "dinner", "bar", "lounge"]
+    else:
+        # Late night: 9:00 PM+
+        return ["bar", "night_club", "late night food", "dessert"]
+
+
+def get_time_context_label(current_hour: int) -> str:
+    """
+    Get human-readable time context label.
+    
+    Args:
+        current_hour: Current hour (0-23)
+    
+    Returns:
+        Time context label (e.g., "morning", "lunch", "dinner")
+    """
+    if 8 <= current_hour < 11:
+        return "morning"
+    elif 11 <= current_hour < 12:
+        return "brunch"
+    elif 12 <= current_hour < 14:
+        return "lunch"
+    elif 14 <= current_hour < 17:
+        return "afternoon"
+    elif 17 <= current_hour < 21:
+        return "dinner"
+    else:
+        return "late_night"
+
+
+def apply_time_context_filter(places: List[Dict], current_hour: int) -> List[Dict]:
+    """
+    Filter places based on time context relevance.
+    
+    This is a soft filter - prioritizes places that match time context,
+    but doesn't exclude others completely.
+    
+    Args:
+        places: List of place dictionaries
+        current_hour: Current hour (0-23)
+    
+    Returns:
+        Filtered and re-sorted list (time-relevant places first)
+    """
+    time_context = get_time_context_label(current_hour)
+    context_keywords = get_time_context_query(current_hour)
+    
+    scored_places = []
+    
+    for place in places:
+        # Extract place types/categories
+        place_types = []
+        if 'types' in place:
+            place_types = [t.lower() for t in place.get('types', [])]
+        elif 'categories' in place:
+            place_types = [c.lower() for c in place.get('categories', [])]
+        
+        # Check if place matches time context
+        match_score = 0
+        for keyword in context_keywords:
+            keyword_lower = keyword.lower()
+            if any(keyword_lower in pt for pt in place_types):
+                match_score += 1
+        
+        # Add score to place
+        place_copy = place.copy()
+        place_copy['_time_match_score'] = match_score
+        scored_places.append(place_copy)
+    
+    # Sort by time match score (higher = more relevant)
+    scored_places.sort(key=lambda p: p.get('_time_match_score', 0), reverse=True)
+    
+    return scored_places
 

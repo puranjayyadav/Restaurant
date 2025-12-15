@@ -8,7 +8,8 @@ from .views import (
     delete_public_itinerary, approve_public_itinerary, get_user_stats,
     get_scraped_restaurants, get_scraped_restaurant_detail, create_scraped_restaurant,
     generate_and_enrich_itinerary, get_pre_created_itineraries, 
-    pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail
+    pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
+    next_best_action
 )
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -32,6 +33,7 @@ urlpatterns = [
     path('interaction/', record_user_interaction, name='record-interaction'),
     path('recommendations/', get_personalized_recommendations, name='personalized-recommendations'),
     path('generate-day-itinerary/', generate_day_itinerary, name='generate-day-itinerary'),
+    path('next-best-action/', next_best_action, name='next-best-action'),
     # Public Itinerary Sharing endpoints
     path('submit-itinerary/', submit_public_itinerary, name='submit-itinerary'),
     path('public-itineraries/', get_public_itineraries, name='public-itineraries'),

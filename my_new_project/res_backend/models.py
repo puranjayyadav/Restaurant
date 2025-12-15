@@ -430,3 +430,35 @@ class RestaurantDeduplication(models.Model):
     
     def __str__(self):
         return f"{self.restaurant1.name} <-> {self.restaurant2.name} ({self.similarity_score:.2f})"
+
+
+class ScrapedPlaceCache(models.Model):
+    """
+    Cache for scraped places by geohash cell and time context.
+    
+    Uses rolling TTL: scraped_at field is checked against 24-hour window.
+    This avoids the need for a separate expires_at field and prevents VACUUM issues.
+    """
+    geohash = models.CharField(max_length=12, db_index=True, help_text="Geohash cell ID (precision 7 = ~153m)")
+    query_context = models.CharField(max_length=100, db_index=True, help_text="Time context (e.g., 'lunch', 'morning')")
+    places_data = models.JSONField(help_text="Cached scraped places")
+    scraped_at = models.DateTimeField(auto_now_add=True, db_index=True, help_text="Used for TTL check (24 hours)")
+    hit_count = models.IntegerField(default=0, help_text="Number of cache hits")
+    
+    class Meta:
+        unique_together = ('geohash', 'query_context')
+        indexes = [
+            models.Index(fields=['geohash', 'query_context', 'scraped_at'], name='cache_lookup_idx'),
+            models.Index(fields=['scraped_at'], name='cache_cleanup_idx'),
+        ]
+        ordering = ['-scraped_at']
+    
+    def __str__(self):
+        return f"{self.geohash}/{self.query_context} ({self.hit_count} hits)"
+    
+    def is_valid(self) -> bool:
+        """Check if cache is still valid (within 24 hours)."""
+        from django.utils import timezone
+        from datetime import timedelta
+        cutoff_time = timezone.now() - timedelta(hours=24)
+        return self.scraped_at > cutoff_time

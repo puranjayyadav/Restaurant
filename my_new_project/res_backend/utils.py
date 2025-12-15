@@ -535,7 +535,7 @@ def calculate_visit_duration(place, category=None):
     return 60
 
 
-def get_time_windows_for_categories(categories=None):
+def get_time_windows_for_categories(categories=None, solver_data=None):
     """
     Get time window for a place based on its categories.
     
@@ -580,6 +580,26 @@ def get_time_windows_for_categories(categories=None):
         'lounge': [windows['evening']],
     }
     
+    # If solver_data has explicit time_bias, prefer that
+    if solver_data and isinstance(solver_data, dict):
+        bias = str(solver_data.get('time_bias') or '').strip().lower()
+        if bias:
+            if bias == 'morning':
+                return windows['morning']
+            if bias in ('mid-day', 'mid_day', 'afternoon'):
+                # Treat generic daytime / afternoon as afternoon window
+                return windows['afternoon']
+            if bias in ('evening', 'sunset', 'dinner'):
+                return windows['evening']
+            if bias in ('late night', 'late-night', 'late'):
+                # Late night still treated as evening window for now
+                return windows['evening']
+
+        # Fallback: if category_normalized is present, treat it as a single-category hint
+        cat_norm = solver_data.get('category_normalized')
+        if cat_norm and not categories:
+            categories = [cat_norm]
+
     # If categories provided, return a single time window tuple
     if categories:
         categories_lower = [c.lower() if isinstance(c, str) else str(c).lower() for c in categories]

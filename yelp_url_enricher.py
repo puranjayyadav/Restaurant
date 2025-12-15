@@ -30,26 +30,19 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import django
 
-# Optional Django import - only needed for functions that use Django models
-try:
-    import django
-    # Setup Django environment
-    sys.path.append(os.path.join(os.path.dirname(__file__), 'my_new_project'))
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_new_project.settings')
-    django.setup()
-    from res_backend.models import ScrapedRestaurant
-    DJANGO_AVAILABLE = True
-except (ImportError, ModuleNotFoundError, Exception):
-    # Django not available - functions that require it will fail gracefully
-    ScrapedRestaurant = None
-    DJANGO_AVAILABLE = False
+# Setup Django environment
+sys.path.append(os.path.join(os.path.dirname(__file__), 'my_new_project'))
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_new_project.settings')
+django.setup()
+
+from res_backend.models import ScrapedRestaurant
 
 
 def setup_chromium_driver(headless: bool = True):
     """
     Setup Selenium WebDriver with Chromium/Chrome.
-    Automatically detects CI environment and uses appropriate settings.
     
     Args:
         headless: Whether to run browser in headless mode
@@ -57,14 +50,7 @@ def setup_chromium_driver(headless: bool = True):
     Returns:
         WebDriver instance
     """
-    # Check if running in CI environment
-    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
-    
     options = Options()
-    
-    # Set binary location for CI environments
-    if is_ci:
-        options.binary_location = "/usr/bin/chromium-browser"
     
     # Anti-detection measures
     options.add_argument('--disable-blink-features=AutomationControlled')
@@ -72,39 +58,16 @@ def setup_chromium_driver(headless: bool = True):
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    # CI-specific options (required for GitHub Actions)
-    if is_ci:
-        options.add_argument('--headless=new')  # Use new headless mode
-        options.add_argument('--no-sandbox')  # Required for GitHub Actions
-        options.add_argument('--disable-dev-shm-usage')  # Required for GitHub Actions
-        options.add_argument('--disable-gpu')  # Disable GPU in headless
-        options.add_argument('--disable-software-rasterizer')  # Disable software rasterizer
-        options.add_argument('--disable-extensions')  # Disable extensions
-        options.add_argument('--disable-background-timer-throttling')  # Disable background throttling
-        options.add_argument('--disable-backgrounding-occluded-windows')
-        options.add_argument('--disable-renderer-backgrounding')
-        options.add_argument('--disable-features=TranslateUI')
-        options.add_argument('--disable-ipc-flooding-protection')
-        options.add_argument('--window-size=1920,1080')  # Set window size for consistent rendering
-        options.add_argument('--single-process')  # Run in single process mode (helps with stability)
-    else:
-        # Local development
-        if headless:
-            options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
+    if headless:
+        options.add_argument('--headless')
+    
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
     
     try:
-        # In CI, explicitly set ChromeDriver service
-        if is_ci:
-            from selenium.webdriver.chrome.service import Service
-            service = Service()
-            driver = webdriver.Chrome(service=service, options=options)
-        else:
-            driver = webdriver.Chrome(options=options)
-        
+        driver = webdriver.Chrome(options=options)
         # Execute script to hide webdriver property
         driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
             'source': '''
@@ -361,10 +324,9 @@ def find_yelp_url(restaurant_name: str, city: str, state: str = None, debug: boo
             driver.quit()
 
 
-def enrich_restaurant_with_yelp_url(restaurant: 'ScrapedRestaurant', delay: float = 1.0, headless: bool = True) -> bool:
+def enrich_restaurant_with_yelp_url(restaurant: ScrapedRestaurant, delay: float = 1.0, headless: bool = True) -> bool:
     """
     Enrich a single restaurant record with its Yelp URL.
-    Requires Django to be available.
     
     Args:
         restaurant: ScrapedRestaurant instance
@@ -374,8 +336,6 @@ def enrich_restaurant_with_yelp_url(restaurant: 'ScrapedRestaurant', delay: floa
     Returns:
         True if URL was found and saved, False otherwise
     """
-    if not DJANGO_AVAILABLE:
-        raise ImportError("Django is required for enrich_restaurant_with_yelp_url. Use find_yelp_url instead.")
     # Skip if already has Yelp URL
     if restaurant.source_url and 'yelp.com' in restaurant.source_url:
         print(f"Skipping {restaurant.name} - already has Yelp URL")
@@ -436,7 +396,6 @@ def enrich_all_restaurants(
 ) -> Dict[str, int]:
     """
     Enrich all restaurants (or a filtered subset) with Yelp URLs.
-    Requires Django to be available.
     
     Args:
         source: Filter by source (e.g., 'google' for Google Maps restaurants)
@@ -448,9 +407,6 @@ def enrich_all_restaurants(
     Returns:
         Dictionary with statistics: {'processed': int, 'found': int, 'failed': int}
     """
-    if not DJANGO_AVAILABLE:
-        raise ImportError("Django is required for enrich_all_restaurants.")
-    
     # Query restaurants
     queryset = ScrapedRestaurant.objects.filter(is_active=True)
     
@@ -574,11 +530,6 @@ def main():
     )
     
     args = parser.parse_args()
-    
-    if not DJANGO_AVAILABLE:
-        print("ERROR: Django is required to run this script.")
-        print("This script requires Django models. Use find_yelp_url() function directly if you don't need Django.")
-        sys.exit(1)
     
     if args.test:
         # Test mode: process one restaurant

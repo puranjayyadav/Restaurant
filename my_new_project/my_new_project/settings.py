@@ -34,6 +34,14 @@ ALLOWED_HOSTS = ['*']
 # Falls back to rule-based algorithm if OR-Tools fails
 USE_OR_TOOLS_OPTIMIZER = True  # Set to True to enable OR-Tools optimization
 
+# Clustering + gap filling for walkable neighborhoods
+ENABLE_CLUSTERING = True
+ENABLE_GAP_FILLING = True
+DBSCAN_EPS_KM = 0.4  # 400m walkability radius
+DBSCAN_MIN_SAMPLES = 3
+MAX_CLUSTERS_TO_USE = 3
+CLUSTER_STRATEGY = 'single'  # 'single' or 'multi_penalized'
+
 
 # Application definition
 

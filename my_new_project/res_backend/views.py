@@ -482,6 +482,7 @@ def generate_day_itinerary(request):
         calculate_visit_duration, 
         get_time_windows_for_categories
     )
+    from res_backend.clustering_service import find_walkable_neighborhoods
     
     try:
         data = json.loads(request.body) if isinstance(request.body, bytes) else request.data
@@ -497,9 +498,16 @@ def generate_day_itinerary(request):
         # Feature flag: Use OR-Tools optimizer if enabled
         USE_OR_TOOLS_OPTIMIZER = os.getenv('USE_OR_TOOLS_OPTIMIZER', 'false').lower() == 'true'
         USE_OR_TOOLS_OPTIMIZER = getattr(settings, 'USE_OR_TOOLS_OPTIMIZER', USE_OR_TOOLS_OPTIMIZER)
+
+        # Clustering feature flags
+        ENABLE_CLUSTERING = getattr(settings, 'ENABLE_CLUSTERING', True)
+        ENABLE_GAP_FILLING = getattr(settings, 'ENABLE_GAP_FILLING', True)
+        MAX_CLUSTERS_TO_USE = int(getattr(settings, 'MAX_CLUSTERS_TO_USE', 3))
+        CLUSTER_STRATEGY = getattr(settings, 'CLUSTER_STRATEGY', 'single')
         
         print(f"DEBUG: Using max distance: {max_distance_km}km between places")
         print(f"DEBUG: OR-Tools optimizer enabled: {USE_OR_TOOLS_OPTIMIZER}")
+        print(f"DEBUG: Clustering enabled: {ENABLE_CLUSTERING}, gap filling: {ENABLE_GAP_FILLING}, max clusters: {MAX_CLUSTERS_TO_USE}, strategy: {CLUSTER_STRATEGY}")
         
         if not places_data:
             return Response(
@@ -507,15 +515,94 @@ def generate_day_itinerary(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # HYBRID FETCH STRATEGY: Merge scraper results with database places
+        print(f"DEBUG: Starting hybrid fetch - {len(places_data)} scraper results")
+        
+        # Fetch nearby saved places from Supabase (Stream B)
+        radius_meters = int(max_distance_km * 1000 * 2)  # 2x radius for DB fetch (wider net)
+        saved_places = _fetch_nearby_saved_places(latitude, longitude, radius_meters)
+        print(f"DEBUG: Fetched {len(saved_places)} saved places from database")
+        
+        # Merge scraper results (Stream A) with database places (Stream B)
+        merged_places = _merge_scraper_and_database_places(
+            places_data, saved_places, latitude, longitude
+        )
+        print(f"DEBUG: After hybrid merge: {len(merged_places)} total unique places")
+        
+        # Convert merged places to Google Places format for compatibility
+        # The merge function already handles format conversion, but ensure geometry structure
+        for place in merged_places:
+            # Ensure geometry structure exists for distance calculations
+            if 'geometry' not in place or 'location' not in place.get('geometry', {}):
+                lat = place.get('lat') or place.get('latitude')
+                lng = place.get('long') or place.get('lng') or place.get('longitude')
+                if lat and lng:
+                    place['geometry'] = {
+                        'location': {
+                            'lat': float(lat),
+                            'lng': float(lng)
+                        }
+                    }
+        
         # Try OR-Tools path first (if enabled)
         if USE_OR_TOOLS_OPTIMIZER:
             try:
+                places_for_solver = merged_places
+                cluster_metadata = None
+
+                if ENABLE_CLUSTERING:
+                    clusters = find_walkable_neighborhoods(
+                        merged_places,
+                        user_location=(latitude, longitude),
+                        enable_gap_filling=ENABLE_GAP_FILLING,
+                        top_k=MAX_CLUSTERS_TO_USE,
+                    )
+                    if clusters:
+                        if CLUSTER_STRATEGY == 'single':
+                            # Deep dive in the single best neighborhood
+                            best_cluster = clusters[0]
+                            places_for_solver = best_cluster.get('places', []) or merged_places
+                            cluster_metadata = {
+                                'strategy': 'single',
+                                'best_cluster_label': best_cluster.get('label'),
+                                'best_cluster_score': best_cluster.get('composite_score'),
+                                'best_cluster_size': best_cluster.get('size'),
+                                'best_cluster_meta_verticals': best_cluster.get('meta_verticals', []),
+                                'gap_filled': bool(best_cluster.get('gap_filled')),
+                            }
+                        else:
+                            # Optional multi-neighborhood mode – flatten top_k clusters,
+                            # but keep track of cluster ids for potential penalties.
+                            selected = clusters[: max(1, MAX_CLUSTERS_TO_USE)]
+                            flat_places: List[Dict] = []
+                            for cl in selected:
+                                for p in cl.get('places', []):
+                                    p_with_cluster = dict(p)
+                                    p_with_cluster['cluster_id'] = cl.get('label')
+                                    flat_places.append(p_with_cluster)
+                            if flat_places:
+                                places_for_solver = flat_places
+                                cluster_metadata = {
+                                    'strategy': 'multi_penalized',
+                                    'cluster_labels': [c.get('label') for c in selected],
+                                }
+
                 result = _generate_with_or_tools(
-                    places_data, latitude, longitude, selected_categories,
-                    max_distance_km, vegetarian_filter, user_id
+                    places_for_solver,
+                    latitude,
+                    longitude,
+                    selected_categories,
+                    max_distance_km,
+                    vegetarian_filter,
+                    user_id,
+                    use_seen_history=True,
+                    cluster_strategy=CLUSTER_STRATEGY,
                 )
                 if result:
-                    result['metadata'] = {'algorithm': 'or_tools'}
+                    meta = {'algorithm': 'or_tools', 'clustering': 'dbscan' if ENABLE_CLUSTERING else 'none'}
+                    if cluster_metadata:
+                        meta['cluster_metadata'] = cluster_metadata
+                    result['metadata'] = meta
                     return Response(result, status=status.HTTP_200_OK)
                 else:
                     print("DEBUG: OR-Tools returned no solution, falling back to rule-based")
@@ -527,7 +614,7 @@ def generate_day_itinerary(request):
         
         # Fallback to rule-based algorithm (existing logic)
         return _generate_rule_based_itinerary(
-            places_data, latitude, longitude, selected_categories,
+            merged_places, latitude, longitude, selected_categories,
             max_distance_km, vegetarian_filter
         )
         
@@ -541,10 +628,435 @@ def generate_day_itinerary(request):
         )
 
 
-def _generate_with_or_tools(places_data, latitude, longitude, selected_categories,
-                           max_distance_km, vegetarian_filter, user_id):
+def _normalize_phone(phone_str, country_code='US'):
     """
-    Generate itinerary using OR-Tools optimization.
+    Normalize phone number to E.164 format for reliable matching.
+    Uses phonenumbers library (Google's libphonenumber port) if available.
+    Falls back to simple normalization if library not installed.
+    """
+    if not phone_str:
+        return None
+    
+    try:
+        import phonenumbers
+        # Parse the number, assuming US as default region
+        parsed_num = phonenumbers.parse(str(phone_str), country_code)
+        
+        # Format to E.164 standard (e.g., +12125551212)
+        if phonenumbers.is_valid_number(parsed_num):
+            return phonenumbers.format_number(parsed_num, phonenumbers.PhoneNumberFormat.E164)
+    except ImportError:
+        # Fallback: simple normalization if library not available
+        # Remove all non-digit characters except +
+        cleaned = ''.join(c for c in str(phone_str) if c.isdigit() or c == '+')
+        if cleaned:
+            if not cleaned.startswith('+'):
+                # Assume US if no country code
+                if len(cleaned) == 10:
+                    cleaned = '+1' + cleaned
+                elif len(cleaned) == 11 and cleaned.startswith('1'):
+                    cleaned = '+' + cleaned
+            return cleaned
+    except Exception as e:
+        print(f"DEBUG: Error normalizing phone {phone_str}: {e}")
+    
+    return None
+
+
+def _fetch_nearby_saved_places(lat, lng, radius_meters=2000):
+    """
+    Fetch nearby saved places from Supabase using spatial query.
+    This is Layer 1 of the Hybrid Fetch strategy - efficiently get only relevant DB rows.
+    
+    Returns:
+        List of place dictionaries from Supabase
+    """
+    try:
+        # Import supabase config
+        import sys
+        import os
+        # Add parent directory to path to import supabase_config
+        parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from supabase_config import get_supabase_client
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            print("DEBUG: Supabase client not available, skipping database fetch")
+            return []
+        
+        # Try to use RPC function if it exists, otherwise fallback to client-side filtering
+        # Try combined RPC function first (fetches from all sources)
+        try:
+            result = supabase.rpc('get_nearby_saved_places_all', {
+                'lat': float(lat),
+                'lng': float(lng),
+                'radius_meters': int(radius_meters)
+            }).execute()
+            
+            if result.data:
+                print(f"DEBUG: Fetched {len(result.data)} nearby places from Supabase (combined RPC)")
+                return result.data
+        except Exception as combined_rpc_error:
+            print(f"DEBUG: Combined RPC not available, trying individual RPCs: {combined_rpc_error}")
+        
+        # Try individual RPC functions
+        all_places = []
+        yelp_rpc_error = None
+        scraped_rpc_error = None
+        
+        # Try yelp_restaurants RPC
+        try:
+            result = supabase.rpc('get_nearby_saved_places_yelp', {
+                'lat': float(lat),
+                'lng': float(lng),
+                'radius_meters': int(radius_meters)
+            }).execute()
+            
+            if result.data:
+                print(f"DEBUG: Fetched {len(result.data)} places from yelp_restaurants (RPC)")
+                all_places.extend(result.data)
+        except Exception as e:
+            yelp_rpc_error = e
+            print(f"DEBUG: Yelp RPC not available: {e}")
+        
+        # Try scraped restaurants RPC (OpenTable, etc.)
+        try:
+            result = supabase.rpc('get_nearby_saved_places_scraped', {
+                'lat': float(lat),
+                'lng': float(lng),
+                'radius_meters': int(radius_meters)
+            }).execute()
+            
+            if result.data:
+                print(f"DEBUG: Fetched {len(result.data)} places from res_backend_scrapedrestaurant (RPC)")
+                all_places.extend(result.data)
+        except Exception as e:
+            scraped_rpc_error = e
+            print(f"DEBUG: Scraped RPC not available: {e}")
+        
+        if all_places:
+            print(f"DEBUG: Total fetched from RPCs: {len(all_places)} places")
+            return all_places
+        
+        # Fallback to client-side filtering
+        print(f"DEBUG: RPC functions not available, using client-side filtering")
+        all_places = []
+        
+        # Try yelp_restaurants table
+        try:
+            yelp_result = supabase.table('yelp_restaurants').select('*').limit(1000).execute()
+            
+            if yelp_result.data:
+                # Filter by distance client-side
+                from res_backend.utils import haversine_distance
+                nearby = []
+                for place in yelp_result.data:
+                            # Handle location as JSONB or dict
+                            location = place.get('location')
+                            if isinstance(location, dict):
+                                place_lat = location.get('lat')
+                                place_lng = location.get('lng')
+                            elif isinstance(location, str):
+                                import json
+                                try:
+                                    location_dict = json.loads(location)
+                                    place_lat = location_dict.get('lat')
+                                    place_lng = location_dict.get('lng')
+                                except:
+                                    place_lat = None
+                                    place_lng = None
+                            else:
+                                place_lat = None
+                                place_lng = None
+                            
+                            # Also check for direct lat/lng fields (if table has them)
+                            if not place_lat:
+                                place_lat = place.get('latitude') or place.get('lat')
+                            if not place_lng:
+                                place_lng = place.get('longitude') or place.get('lng') or place.get('long')
+                            
+                            if place_lat and place_lng:
+                                try:
+                                    distance_m = haversine_distance(lat, lng, float(place_lat), float(place_lng))
+                                    if distance_m <= radius_meters:
+                                        # Convert to Google Places format for compatibility
+                                        place['google_place_id'] = place.get('yelp_id')  # Use yelp_id as identifier
+                                        place['place_id'] = place.get('yelp_id')
+                                        # Ensure geometry structure
+                                        place['geometry'] = {
+                                            'location': {
+                                                'lat': float(place_lat),
+                                                'lng': float(place_lng)
+                                            }
+                                        }
+                                        # Map fields to Google Places format
+                                        place['name'] = place.get('name', '')
+                                        place['formatted_address'] = place.get('address', '')
+                                        place['rating'] = place.get('rating')
+                                        place['user_ratings_total'] = place.get('total_reviews') or place.get('review_count')
+                                        place['types'] = place.get('categories', [])
+                                        place['photos'] = place.get('photos', []) or place.get('image_urls', [])
+                                        nearby.append(place)
+                                except (ValueError, TypeError) as e:
+                                    print(f"DEBUG: Error processing place {place.get('name')}: {e}")
+                                    continue
+                        
+                print(f"DEBUG: Fetched {len(nearby)} nearby places from yelp_restaurants (client-side filter)")
+                all_places.extend(nearby)
+        except Exception as e:
+            print(f"DEBUG: Error fetching yelp_restaurants: {e}")
+        
+        # Also fetch from res_backend_scrapedrestaurant (OpenTable, etc.)
+        try:
+            scraped_places = supabase.table('res_backend_scrapedrestaurant').select('*').eq('is_active', True).is_('duplicate_of_id', 'null').limit(1000).execute()
+            
+            if scraped_places.data:
+                from res_backend.utils import haversine_distance
+                nearby_scraped = []
+                for place in scraped_places.data:
+                    place_lat = place.get('latitude')
+                    place_lng = place.get('longitude')
+                    
+                    if place_lat and place_lng:
+                        try:
+                            distance_m = haversine_distance(lat, lng, float(place_lat), float(place_lng))
+                            if distance_m <= radius_meters:
+                                # Convert to Google Places format for compatibility
+                                place['google_place_id'] = place.get('source_id') or f"scraped_{place.get('id')}"
+                                place['place_id'] = place.get('google_place_id')
+                                # Extract google_place_id from raw_data if available
+                                if place.get('raw_data') and isinstance(place.get('raw_data'), dict):
+                                    raw_place_id = place['raw_data'].get('place_id') or place['raw_data'].get('google_place_id')
+                                    if raw_place_id:
+                                        place['google_place_id'] = raw_place_id
+                                        place['place_id'] = raw_place_id
+                                
+                                # Ensure geometry structure
+                                place['geometry'] = {
+                                    'location': {
+                                        'lat': float(place_lat),
+                                        'lng': float(place_lng)
+                                    }
+                                }
+                                # Map fields to Google Places format
+                                place['name'] = place.get('name', '')
+                                place['formatted_address'] = place.get('address', '')
+                                place['rating'] = float(place.get('rating')) if place.get('rating') else None
+                                place['user_ratings_total'] = place.get('total_reviews', 0)
+                                place['types'] = place.get('categories', [])
+                                place['photos'] = place.get('photos', [])
+                                place['source_type'] = place.get('source', 'other')  # Track source (opentable, etc.)
+                                nearby_scraped.append(place)
+                        except (ValueError, TypeError) as e:
+                            print(f"DEBUG: Error processing scraped place {place.get('name')}: {e}")
+                            continue
+                
+                print(f"DEBUG: Fetched {len(nearby_scraped)} nearby places from res_backend_scrapedrestaurant (client-side filter)")
+                all_places.extend(nearby_scraped)
+        except Exception as e:
+            print(f"DEBUG: Error fetching res_backend_scrapedrestaurant: {e}")
+        
+        if all_places:
+            print(f"DEBUG: Total fetched from client-side filtering: {len(all_places)} places")
+            return all_places
+        
+        return []
+    except Exception as e:
+        print(f"DEBUG: Error in _fetch_nearby_saved_places: {e}")
+        import traceback
+        print(f"DEBUG: {traceback.format_exc()}")
+        return []
+
+
+def _merge_scraper_and_database_places(scraper_results, saved_places, lat, lng):
+    """
+    Hybrid Fetch Strategy: Merge scraper results with database places.
+    
+    Strategy:
+    1. Use google_place_id as primary key for deduplication
+    2. Use normalized phone number as secondary key
+    3. Database version wins when duplicate found (has curated data)
+    4. Add bonus_score for database places
+    
+    Args:
+        scraper_results: List of places from Google Maps scraper (Stream A)
+        saved_places: List of places from Supabase database (Stream B)
+        lat, lng: Center coordinates for distance calculations
+    
+    Returns:
+        Merged list of places with deduplication applied
+    """
+    # Step 1: Normalize phone numbers in scraper results
+    for place in scraper_results:
+        raw_phone = place.get('phone') or place.get('formatted_phone_number') or place.get('phone_number')
+        if raw_phone:
+            place['normalized_phone'] = _normalize_phone(str(raw_phone))
+        else:
+            place['normalized_phone'] = None
+    
+    # Step 2: Create indices from database places
+    # Index by google_place_id (primary key)
+    db_by_place_id = {}
+    # Index by normalized phone (secondary key)
+    phone_index = {}
+    
+    for place in saved_places:
+        # Normalize phone for database places
+        raw_phone = place.get('phone') or place.get('formatted_phone_number')
+        if raw_phone:
+            normalized_phone = _normalize_phone(str(raw_phone))
+            if normalized_phone:
+                phone_index[normalized_phone] = place
+        
+        # Index by google_place_id if available
+        # Check multiple possible locations for google_place_id
+        google_place_id = (
+            place.get('google_place_id') or 
+            place.get('place_id') or
+            (place.get('raw_data', {}).get('place_id') if isinstance(place.get('raw_data'), dict) else None) or
+            (place.get('raw_data', {}).get('google_place_id') if isinstance(place.get('raw_data'), dict) else None)
+        )
+        if google_place_id:
+            db_by_place_id[str(google_place_id)] = place
+    
+    # Step 3: Merge using "Zipper Merge" strategy
+    merged_candidates = {}
+    
+    # Process scraper results (Stream A)
+    for scraper_place in scraper_results:
+        google_place_id = scraper_place.get('place_id') or scraper_place.get('google_place_id')
+        normalized_phone = scraper_place.get('normalized_phone')
+        
+        # CASE 1: Primary Key Match (Google Place ID exists)
+        if google_place_id:
+            place_id_str = str(google_place_id)
+            
+            if place_id_str in db_by_place_id:
+                # Database version wins - merge with scraper data as fallback
+                db_place = db_by_place_id[place_id_str]
+                merged_candidates[place_id_str] = {
+                    **scraper_place,  # Start with scraper data
+                    **db_place,  # Overwrite with database data (wins)
+                    'source': 'database',
+                    'is_saved': True,
+                    'bonus_score': 10,  # Bonus for database places
+                }
+                print(f"DEBUG: Merged {scraper_place.get('name', 'Unknown')} - DB version wins (place_id match)")
+            else:
+                # New scraper result, not in database
+                merged_candidates[place_id_str] = {
+                    **scraper_place,
+                    'source': 'scraper',
+                    'is_saved': False,
+                    'bonus_score': 0,
+                }
+        
+        # CASE 2: Secondary Key Match (Google ID missing, but Phone exists)
+        elif normalized_phone and normalized_phone in phone_index:
+            db_match = phone_index[normalized_phone]
+            db_google_id = db_match.get('google_place_id') or db_match.get('place_id')
+            
+            if db_google_id:
+                # Use DB's Google ID as the merge key
+                place_id_str = str(db_google_id)
+                merged_candidates[place_id_str] = {
+                    **scraper_place,  # Scraper data
+                    **db_match,  # Database data wins
+                    'source': 'database_match_by_phone',
+                    'is_saved': True,
+                    'bonus_score': 10,
+                }
+                print(f"DEBUG: Merged {scraper_place.get('name', 'Unknown')} - DB version wins (phone match)")
+            else:
+                # DB place has no Google ID, create temporary ID
+                temp_id = f"phone_{normalized_phone}"
+                merged_candidates[temp_id] = {
+                    **scraper_place,
+                    **db_match,
+                    'source': 'database_match_by_phone',
+                    'is_saved': True,
+                    'bonus_score': 10,
+                }
+        
+        # CASE 3: No match - new scraper result
+        else:
+            # Create temporary ID for places without place_id
+            temp_id = scraper_place.get('name', 'unknown') + '_' + str(hash(str(scraper_place.get('lat', 0)) + str(scraper_place.get('lng', 0))))
+            merged_candidates[temp_id] = {
+                **scraper_place,
+                'source': 'scraper',
+                'is_saved': False,
+                'bonus_score': 0,
+            }
+    
+    # Step 4: Add database places that weren't in scraper results
+    for db_place in saved_places:
+        google_place_id = db_place.get('google_place_id') or db_place.get('place_id')
+        if google_place_id:
+            place_id_str = str(google_place_id)
+            if place_id_str not in merged_candidates:
+                # Database place not found in scraper results - add it
+                merged_candidates[place_id_str] = {
+                    **db_place,
+                    'source': 'database_only',
+                    'is_saved': True,
+                    'bonus_score': 10,
+                }
+    
+    print(f"DEBUG: Hybrid merge complete - {len(merged_candidates)} unique places")
+    print(f"DEBUG:   - From scraper: {sum(1 for p in merged_candidates.values() if p.get('source') == 'scraper')}")
+    print(f"DEBUG:   - From database: {sum(1 for p in merged_candidates.values() if p.get('is_saved'))}")
+    
+    return list(merged_candidates.values())
+
+
+def _get_user_seen_place_ids(user_id):
+    """
+    Layer 2 Helper: Get list of place_ids the user has seen/interacted with.
+    Returns a set of place_ids for efficient lookup.
+    
+    Since user_id is a Firebase UID (string), we query Firestore directly
+    where the Flutter app stores establishments with user's UID.
+    """
+    if not user_id:
+        return set()
+    
+    try:
+        # Query Firestore for establishments associated with this user
+        # Flutter app stores establishments in collectionGroup('establishments') with 'uid' field
+        seen_place_ids = set()
+        
+        # Query Firestore for user's establishments
+        establishments_query = db.collection_group('establishments').where('uid', '==', user_id).limit(1000).stream()
+        
+        for doc in establishments_query:
+            data = doc.to_dict()
+            # Extract place_id from the establishment data
+            place_id = data.get('place_id') or data.get('id')
+            if place_id:
+                seen_place_ids.add(str(place_id))
+        
+        print(f"DEBUG: User {user_id} has seen {len(seen_place_ids)} places from Firestore")
+        return seen_place_ids
+    except Exception as e:
+        print(f"DEBUG: Error fetching user seen places from Firestore: {e}")
+        import traceback
+        print(f"DEBUG: {traceback.format_exc()}")
+        return set()
+
+
+def _generate_with_or_tools(places_data, latitude, longitude, selected_categories,
+                           max_distance_km, vegetarian_filter, user_id,
+                           use_seen_history=True, cluster_strategy='single'):
+    """
+    Generate itinerary using OR-Tools optimization with 3-Layer Logic Stack.
+    
+    Layer 1 (Iron Dome): Hard geofence - only places within max_distance_km
+    Layer 2 (Soft Decay): Apply 0.7 multiplier to scores of seen places
+    Layer 3 (Emergency Reset): Check average score, reset if < 60
     
     Returns:
         Dict with itinerary data, or None if solver fails
@@ -635,6 +1147,11 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
         print(f"DEBUG: No places within {max_distance_km}km of start location")
         return None
     
+    # LAYER 2: Get user's seen places for soft decay
+    seen_place_ids = set()
+    if use_seen_history and user_id:
+        seen_place_ids = _get_user_seen_place_ids(user_id)
+    
     # Pre-process places: calculate scores, durations, time windows
     places = []
     scores = []
@@ -644,6 +1161,20 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
     for place in local_places:
         # Calculate utility score
         score = calculate_restaurant_score(place, filters=None, user_preferences=None)
+        
+        # Add bonus score for database places (from Hybrid Fetch)
+        bonus_score = place.get('bonus_score', 0)
+        if bonus_score > 0:
+            score += bonus_score
+            print(f"DEBUG: Bonus score +{bonus_score} for {place.get('name', 'Unknown')} (from database)")
+        
+        # LAYER 2: Apply soft decay (0.7 multiplier) to seen places
+        place_id = place.get('place_id') or place.get('google_place_id', '')
+        if place_id and str(place_id) in seen_place_ids:
+            original_score = score
+            score = score * 0.7  # 30% penalty for seen places
+            print(f"DEBUG: Soft decay applied to {place.get('name', 'Unknown')}: {original_score:.1f} -> {score:.1f}")
+        
         scores.append(score)
         
         # Calculate visit duration (function accepts place object)
@@ -651,8 +1182,11 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
         duration = calculate_visit_duration(place=place)
         durations.append(duration)
         
-        # Get time window based on place categories
-        time_window = get_time_windows_for_categories(place_types)
+        # Get time window based on place categories and optional solver_data.time_bias
+        time_window = get_time_windows_for_categories(
+            place_types,
+            solver_data=place.get('solver_data')
+        )
         time_windows.append(time_window)
         places.append(place)
     
@@ -667,6 +1201,24 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
     except Exception as e:
         print(f"DEBUG: Routing service failed: {e}")
         return None
+
+    # Optional: penalize cluster switching when multi-neighborhood strategy is enabled.
+    if cluster_strategy != 'single':
+        try:
+            cluster_ids = [p.get('cluster_id') for p in places]
+            # Index 0 in time_matrix is the start location; places start at index 1.
+            num_nodes = len(time_matrix)
+            cluster_switch_penalty_minutes = 30  # ~0.5h extra for crossing neighborhoods
+            for i in range(1, num_nodes):
+                for j in range(1, num_nodes):
+                    if i == j:
+                        continue
+                    ci = cluster_ids[i - 1] if i - 1 < len(cluster_ids) else None
+                    cj = cluster_ids[j - 1] if j - 1 < len(cluster_ids) else None
+                    if ci is not None and cj is not None and ci != cj:
+                        time_matrix[i][j] += cluster_switch_penalty_minutes
+        except Exception as e:
+            print(f"DEBUG: Failed to apply cluster-switch penalty: {e}")
     
     # Set up constraints
     category_constraints = {
@@ -700,12 +1252,17 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
     
     # Format output to match existing API response
     itinerary = []
+    itinerary_scores = []  # Track scores for Layer 3 check
     previous_idx = 0  # Start location is index 0 in time_matrix
     
     for i, route_item in enumerate(result['route']):
         place_idx = route_item['place_index']
         if place_idx < len(places):
             place = places[place_idx]
+            
+            # Get the score for this place (for Layer 3 check)
+            if place_idx < len(scores):
+                itinerary_scores.append(scores[place_idx])
             
             # Convert arrival time (minutes from 00:00) to time string
             arrival_min = route_item['arrival_time']
@@ -811,6 +1368,43 @@ def _generate_with_or_tools(places_data, latitude, longitude, selected_categorie
             }
             itinerary.append(itinerary_item)
             previous_idx = place_idx
+    
+    # LAYER 3: Emergency Reset - Check average score
+    if itinerary_scores:
+        average_score = sum(itinerary_scores) / len(itinerary_scores)
+        print(f"DEBUG: Layer 3 - Average itinerary score: {average_score:.1f}")
+        
+        if average_score < 60 and use_seen_history and user_id:
+            print(f"DEBUG: Layer 3 - Emergency Reset triggered! Average score {average_score:.1f} < 60")
+            print(f"DEBUG: Layer 3 - Re-running without seen history penalty")
+            
+            # Re-run without soft decay (use_seen_history=False)
+            reset_result = _generate_with_or_tools(
+                places_data, latitude, longitude, selected_categories,
+                max_distance_km, vegetarian_filter, user_id, use_seen_history=False
+            )
+            
+            if reset_result and reset_result.get('itinerary'):
+                reset_scores = []
+                for item in reset_result['itinerary']:
+                    # Recalculate score for reset itinerary items
+                    place_id = item.get('place_id', '')
+                    # Find the place in local_places and recalculate score
+                    for place in local_places:
+                        if str(place.get('place_id', '')) == str(place_id):
+                            reset_scores.append(calculate_restaurant_score(place, filters=None, user_preferences=None))
+                            break
+                
+                if reset_scores:
+                    reset_avg = sum(reset_scores) / len(reset_scores)
+                    print(f"DEBUG: Layer 3 - Reset itinerary average score: {reset_avg:.1f}")
+                    
+                    # Only use reset if it's better
+                    if reset_avg >= 60:
+                        print(f"DEBUG: Layer 3 - Using reset itinerary (score improved)")
+                        return reset_result
+                    else:
+                        print(f"DEBUG: Layer 3 - Reset still below 60, using original")
     
     return {
         'itinerary': itinerary,

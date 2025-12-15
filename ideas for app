@@ -1,0 +1,371 @@
+Spotify Idea
+
+Yes, absolutely. This is a brilliant "social signaling" feature that fits your target audience (**The Aspirational Socialite**) perfectly.
+
+Instead of rating a night "5 stars" (boring), they rate it **"Empire State of Mind by Jay-Z"** (iconic) or **"Espresso by Sabrina Carpenter"** (trendy/energetic).
+
+Here is the architectural blueprint to build the **"Vibe Anthem"** feature.
+
+### 1\. The Strategy: "Search, Don't Play"
+
+You do **not** need to build a music player. You don't want to deal with complex streaming rights or the heavy Spotify Mobile SDK.
+
+  * **Goal:** Allow users to search for a song, select it, and attach its metadata (Album Art + Title) to the itinerary.
+  * **Playback:** When other users tap it, just **deep-link** them into the actual Spotify app.
+
+### 2\. The Setup (Spotify Developer)
+
+1.  Go to [developer.spotify.com](https://developer.spotify.com) and create an app.
+2.  Get your **Client ID** and **Client Secret**.
+3.  You will use the **"Client Credentials Flow"**. This allows your app to search the Spotify catalog without forcing your users to log in to their own Spotify accounts.
+
+### 3\. The Backend (Supabase Schema)
+
+Add columns to your `itineraries` table to store the anthem.
+
+```sql
+alter table itineraries 
+add column vibe_song_name text,
+add column vibe_artist_name text,
+add column vibe_image_url text,
+add column vibe_spotify_uri text, -- "spotify:track:4cOdK2..."
+add column vibe_audio_valence float; -- (Optional: The mathematical "happiness" of the song)
+```
+
+### 4\. The Flutter Implementation
+
+You need a "Search Delegate" to query Spotify as the user types.
+
+#### Step A: The Spotify Service (Dart)
+
+Use the `http` package to search. You need to fetch a temporary token first.
+
+```dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
+class SpotifyService {
+  final String clientId = 'YOUR_ID';
+  final String clientSecret = 'YOUR_SECRET';
+  String? _accessToken;
+
+  // 1. Authenticate (Get App Token)
+  Future<void> _authenticate() async {
+    String credentials = base64.encode(utf8.encode('$clientId:$clientSecret'));
+    final response = await http.post(
+      Uri.parse('https://accounts.spotify.com/api/token'),
+      headers: {'Authorization': 'Basic $credentials'},
+      body: {'grant_type': 'client_credentials'},
+    );
+    if (response.statusCode == 200) {
+      _accessToken = json.decode(response.body)['access_token'];
+    }
+  }
+
+  // 2. Search Tracks
+  Future<List<dynamic>> searchTracks(String query) async {
+    if (_accessToken == null) await _authenticate();
+
+    final response = await http.get(
+      Uri.parse('https://api.spotify.com/v1/search?q=$query&type=track&limit=5'),
+      headers: {'Authorization': 'Bearer $_accessToken'},
+    );
+
+    if (response.statusCode == 200) {
+      return json.decode(response.body)['tracks']['items'];
+    }
+    return [];
+  }
+}
+```
+
+#### Step B: The UI (Visual)
+
+When the user submits a review or finishes an itinerary, show a **"What was the vibe?"** card.
+
+  * **Input:** Search bar.
+  * **Result:** List of songs with album art.
+  * **Action:** Tapping a song saves the metadata to Supabase.
+
+### 5\. The "Secret Sauce" (Audio Features API)
+
+This is where you make Plandit smarter than everyone else.
+Spotify has an endpoint called **"Get Audio Features"** that returns mathematical scores for every song:
+
+  * **Energy (0.0 - 1.0):** Intensity/Activity.
+  * **Valence (0.0 - 1.0):** Musical positiveness (Happy vs. Sad).
+  * **Danceability:** Tempo stability.
+
+**The "Vibe Match" Algorithm:**
+If a user selects *"Club Can't Handle Me"*:
+
+1.  Spotify tells you: `Energy: 0.9`, `Valence: 0.8`.
+2.  You save these numbers in your DB.
+3.  **Future Feature:** You can now query your database:
+      * *"Show me itineraries with **Energy \> 0.8**"* -\> Result: High-intensity nightlife itineraries.
+      * *"Show me itineraries with **Valence \< 0.4**"* -\> Result: Moody, rainy day coffee shop routes.
+
+### 6\. Displaying it (The "Embed")
+
+In your itinerary detail screen, show a **"Vibe Chip"** floating at the top.
+
+  * **Visual:** Small Album Art + "Now Playing: [Song Name]" with a sound wave animation (use `Rive` for this\!).
+  * **Action:**
+    ```dart
+    // Open the song in the Spotify App
+    launchUrl(Uri.parse(itinerary.vibeSpotifyUri)); 
+    ```
+
+### Summary
+
+  * **Is it hard?** No. Spotify's API is excellent.
+  * **Does it cost money?** No. It is free.
+  * **Does it add value?** Massive value. It turns a "Travel App" into a "Lifestyle App."
+
+
+
+
+
+
+
+
+
+
+
+
+  To turn a "Food List" into a real "Itinerary," you need to systematically ingest **Activities**.
+
+The mistake most developers make is searching for generic terms like "Things to do." That returns tourist traps (Statue of Liberty). To get the *cool* stuff (Vintage shops, hidden galleries, niche museums), you need to be specific.
+
+Here is the strategy to mine, store, and schedule non-food locations.
+
+### 1\. The Taxonomy (What to search for)
+
+You need to expand your `scout.py` and Google Maps scraper keyword lists. Break "Activities" down into 4 distinct buckets that define a "Vibe."
+
+| Bucket | Keywords for Scraper | Default Duration |
+| :--- | :--- | :--- |
+| **Shopping** | `Vintage clothing`, `Thrift store`, `Record store`, `Bookstore`, `Concept store`, `Flea market` | **30 - 45 mins** |
+| **Culture** | `Art gallery`, `Museum`, `Historic site`, `Comedy club`, `Jazz club`, `Indie theater` | **90 - 120 mins** |
+| **Outdoors** | `Park`, `Community garden`, `Pier`, `Scenic lookout`, `Basketball court` | **30 - 60 mins** |
+| **Social** | `Billiards`, `Bowling`, `Arcade`, `Ping pong`, `Karaoke` | **60 - 90 mins** |
+
+### 2\. The Mining Strategy
+
+You don't need new tools. You just need to feed your existing **Google Maps Scraper** and **Lemon8 Miner** new inputs.
+
+#### A. Google Maps (The "Grid" Approach)
+
+Update your Python script to loop through neighborhoods with these new suffixes.
+
+```python
+# In your existing scraper script
+neighborhoods = ["SoHo", "Williamsburg", "Astoria"]
+activity_types = [
+    "vintage clothing stores", # Specific is better than "Shopping"
+    "independent bookstores",
+    "art galleries",
+    "parks and gardens",
+    "comedy clubs"
+]
+
+for hood in neighborhoods:
+    for activity in activity_types:
+        query = f"{activity} in {hood}, NYC"
+        # Run scraper...
+```
+
+#### B. Lemon8 (The "Vibe" Approach)
+
+Update your `scout.py` to target activity-specific hashtags. This is where you find the "hidden gems."
+
+  * `#nycactivities`
+  * `#nycfree`
+  * `#nycthrifting`
+  * `#nycmuseum`
+  * `#dateideasnyc` (Goldmine for non-food activities)
+
+### 3\. The Database Upgrade (Crucial)
+
+Restaurants are easy (Duration = 90 mins). Activities are hard. A park visit might be 15 minutes; a museum is 3 hours.
+
+You must add a `default_duration` column to your `places` table and populate it based on the category.
+
+**SQL Update:**
+
+```sql
+alter table places add column category_group text; -- 'food', 'shopping', 'culture'
+alter table places add column avg_duration_minutes int default 60;
+```
+
+**Python Categorization Logic (The "Tagger"):**
+When you save a place from Google Maps, look at the `types` array to guess the duration.
+
+```python
+def guess_category_and_duration(google_types):
+    types_set = set(google_types)
+    
+    if 'museum' in types_set or 'art_gallery' in types_set:
+        return 'culture', 90
+    elif 'park' in types_set:
+        return 'outdoors', 30
+    elif 'clothing_store' in types_set or 'book_store' in types_set:
+        return 'shopping', 45
+    elif 'restaurant' in types_set or 'food' in types_set:
+        return 'food', 90
+    else:
+        return 'misc', 60
+```
+
+### 4\. The Solver Logic (The "Sandwich Rule")
+
+If you just feed these into OR-Tools, it might create a route with 4 museums in a row. You need to enforce a **Rhythm**.
+
+**The Rule:** "Sandwich activities between food."
+
+  * *Pattern:* **Activity** $\rightarrow$ **Food** $\rightarrow$ **Activity** $\rightarrow$ **Drink**.
+
+**Implementation in OR-Tools:**
+Use **Dimension Constraints**.
+
+1.  **Define Dimensions:**
+      * `Food_Visits`
+      * `Activity_Visits`
+2.  **Set Limits:**
+      * `Max_Food_Visits = 2` (Lunch + Dinner)
+      * `Min_Activity_Visits = 1` (Force the user to do something other than eat)
+3.  **Sequence Constraint (Advanced):**
+      * You can penalize "Food followed by Food."
+      * *Logic:* If Stop A is `Food` and Stop B is `Food`, add a huge penalty to the arc cost.
+
+### Summary Checklist
+
+1.  **Expand Keywords:** Add "Vintage," "Gallery," "Park," "Books" to your scraper list.
+2.  **Tag Data:** Categorize every place as `Food` vs. `Activity` in your DB.
+3.  **Assign Time:** Give Activities specific durations (Shopping = 45m, Museum = 90m).
+4.  **Force Variety:** Update OR-Tools to require `Min_Activity >= 1` per itinerary.
+
+This turns Plandit from a "Restaurant Finder" into a "Day Planner."
+
+
+
+
+
+{
+  "city": "New York",
+  "stops": [
+    {
+      "notes": "Renowned for serving some of the best pizza in the city, with a perfectly charred crust and rich, flavorful toppings. Pair your slice with a refreshing Goose Island IPA for a classic NYC pizzeria experience.",
+      "category": "Food",
+      "place_name": "John's of Bleecker Street",
+      "solver_data": {
+        "time_bias": "Anytime",
+        "vibe_tags": [
+          "Classic",
+          "Casual",
+          "Cozy",
+          "Local Favorite",
+          "Quick Service"
+        ],
+        "price_tier": "$",
+        "duration_minutes": 45,
+        "category_normalized": "Pizza"
+      },
+      "search_query": "John's of Bleecker Street New York"
+    },
+    {
+      "notes": "Offers arguably the best bagels in town, known for their fluffy yet chewy texture and wide variety of toppings and spreads. It's a true New York essential that locals and visitors alike rave about.",
+      "category": "Food",
+      "place_name": "Ess-a-Bagel",
+      "solver_data": {
+        "time_bias": "Morning",
+        "vibe_tags": [
+          "Cozy",
+          "Casual",
+          "Solo Friendly",
+          "Authentic",
+          "Quick Service"
+        ],
+        "price_tier": "$",
+        "duration_minutes": 30,
+        "category_normalized": "Bagel Shop"
+      },
+      "search_query": "Ess-a-Bagel New York"
+    },
+    {
+      "notes": "A beloved local chain known for its freshly brewed coffee and cozy atmosphere. It's a great spot to stop in for your morning caffeine fix or an afternoon pick-me-up.",
+      "category": "Coffee",
+      "place_name": "Blank Street Coffee",
+      "solver_data": {
+        "time_bias": "Morning",
+        "vibe_tags": [
+          "Cozy",
+          "Casual",
+          "Solo Friendly",
+          "Work Friendly"
+        ],
+        "price_tier": "$",
+        "duration_minutes": 30,
+        "category_normalized": "Coffee"
+      },
+      "search_query": "Blank Street Coffee New York"
+    },
+    {
+      "notes": "A must-visit for those with a sweet tooth. Their inventive doughnut flavors, made with seasonal ingredients and quality craftsmanship, are a delightful treat just a short walk from Cornelia Street.",
+      "category": "Food",
+      "place_name": "The Doughnut Project",
+      "solver_data": {
+        "time_bias": "Morning",
+        "vibe_tags": [
+          "Cozy",
+          "Trendy",
+          "Solo Friendly",
+          "Quiet"
+        ],
+        "price_tier": "$",
+        "duration_minutes": 30,
+        "category_normalized": "Dessert"
+      },
+      "search_query": "The Doughnut Project New York"
+    },
+    {
+      "notes": "A rooftop hotspot offering great cocktails, a lively atmosphere, and spectacular skyline panoramas that make it perfect for an evening gathering or special occasion.",
+      "category": "Nightlife",
+      "place_name": "230 Fifth Rooftop Bar",
+      "solver_data": {
+        "time_bias": "Evening",
+        "vibe_tags": [
+          "Lively",
+          "Trendy",
+          "Romantic",
+          "Group Friendly",
+          "Scenic"
+        ],
+        "price_tier": "$$",
+        "duration_minutes": 120,
+        "category_normalized": "Rooftop Bar"
+      },
+      "search_query": "230 Fifth Rooftop Bar New York"
+    },
+    {
+      "notes": "Offers elevated Italian fare right in the heart of Harlem. Their seasonal menus and inviting ambiance make it a favorite for upscale dining and a great way to experience Harlem's vibrant culinary scene.",
+      "category": "Food",
+      "place_name": "Lido Harlem Restaurant",
+      "solver_data": {
+        "time_bias": "Evening",
+        "vibe_tags": [
+          "Upscale",
+          "Romantic",
+          "Cozy",
+          "Date Friendly",
+          "Quiet"
+        ],
+        "price_tier": "$$$",
+        "duration_minutes": 120,
+        "category_normalized": "Dinner"
+      },
+      "search_query": "Lido Harlem Restaurant New York"
+    }
+  ],
+  "itinerary_title": "Where to eat and drink in New York City!"
+}

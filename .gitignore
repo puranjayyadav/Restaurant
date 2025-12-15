@@ -61,3 +61,5 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+node_modules
+node_modules

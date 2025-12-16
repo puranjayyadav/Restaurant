@@ -546,6 +546,14 @@ class NBASolver:
         am_pm = "AM" if estimated_arrival.hour < 12 else "PM"
         arrival_str = f"{hour_12}:{estimated_arrival.minute:02d} {am_pm}"
         
+        # Extract vibe_tags from place or solver_data
+        vibe_tags = (
+            place.get('vibe_tags') or 
+            place.get('solver_data', {}).get('vibe_tags') or 
+            []
+        )
+        solver_data = place.get('solver_data', {})
+        
         return {
             "name": place.get('name') or 'Unknown',
             "place_id": place.get('place_id') or '',
@@ -557,6 +565,11 @@ class NBASolver:
             "rating": place.get('rating') or place.get('avg_rating'),
             "types": place.get('types') or place.get('categories') or [],
             "address": place.get('formatted_address') or place.get('address') or place.get('full_address') or '',
+            # Vibe/preference data for UI display
+            "vibe_tags": vibe_tags,
+            "time_bias": solver_data.get('time_bias') or place.get('time_bias'),
+            "price_tier": solver_data.get('price_tier') or place.get('price_tier'),
+            "is_curated": place.get('is_curated', False),
             # Keep raw coordinates so rolling simulations can re-anchor
             "lat": place_lat,
             "lng": place_lon,

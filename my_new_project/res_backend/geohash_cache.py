@@ -266,13 +266,24 @@ def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.
                 stop_info = stops[i] if i < len(stops) else {}
                 stop_name = stop_info.get("name") or stop_info.get("place_name") or f"Stop {i+1}"
                 
+                # Extract solver_data (contains vibe_tags, time_bias, price_tier, etc.)
+                solver_data = stop_info.get("solver_data") or {}
+                
                 # Deduplicate
                 name_key = stop_name.lower().strip()
                 if name_key in seen_names:
                     continue
                 seen_names.add(name_key)
                 
-                # Build curated place dict
+                # Extract vibe_tags from solver_data (primary) or stop_info (fallback)
+                vibe_tags = (
+                    solver_data.get("vibe_tags") or 
+                    stop_info.get("vibe_tags") or 
+                    stop_info.get("tags") or 
+                    []
+                )
+                
+                # Build curated place dict with FULL solver_data extraction
                 curated_place = {
                     "name": stop_name,
                     "lat": float(stop_lat),
@@ -284,8 +295,14 @@ def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.
                     "rating": stop_info.get("rating") or 4.5,  # Default good rating for curated
                     "types": _infer_types_from_name(stop_name),
                     "custom_notes": stop_info.get("description") or stop_info.get("notes") or "",
-                    "vibe_tags": stop_info.get("vibe_tags") or stop_info.get("tags") or [],
-                    "time_bias": stop_info.get("time_bias") or stop_info.get("best_time") or None,
+                    # Vibe/preference data from solver_data
+                    "vibe_tags": vibe_tags,
+                    "time_bias": solver_data.get("time_bias") or stop_info.get("time_bias") or None,
+                    "price_tier": solver_data.get("price_tier"),
+                    "duration_minutes": solver_data.get("duration_minutes"),
+                    "category_normalized": solver_data.get("category_normalized"),
+                    # Keep full solver_data for advanced matching
+                    "solver_data": solver_data if solver_data else None,
                 }
                 
                 curated_places.append(curated_place)

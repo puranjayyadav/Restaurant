@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+import json # Import json for pretty printing
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -87,6 +88,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def generate_solver_tags(stop: Dict[str, Any], itinerary_title: str) -> Optional[Dict[str, Any]]:
     user_prompt = build_prompt(stop, itinerary_title)
+    print(f"[DEBUG] User Prompt for LLM:\n{user_prompt}") # Verbose log
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("[WARN] OPENROUTER_API_KEY not set; skipping")
@@ -110,12 +112,15 @@ def generate_solver_tags(stop: Dict[str, Any], itinerary_title: str) -> Optional
     }
     try:
         resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+        print(f"[DEBUG] LLM Raw Response Status: {resp.status_code}") # Verbose log
+        print(f"[DEBUG] LLM Raw Response Body:\n{json.dumps(resp.json(), indent=2)}") # Verbose log
         if resp.status_code != 200:
             print(f"[WARN] OpenRouter {resp.status_code}: {resp.text[:200]}")
             return None
         data = resp.json()
         raw = data["choices"][0]["message"]["content"]
         parsed = SolverTags.model_validate_json(raw)
+        print(f"[DEBUG] LLM Parsed Tags: {parsed.model_dump()}") # Verbose log
         return parsed.model_dump()
     except Exception as e:
         print(f"[WARN] LLM classification failed for {stop.get('place_name')}: {e}")
@@ -130,6 +135,7 @@ def enrich_stops(stops: List[Dict[str, Any]], itinerary_title: str, force: bool)
             continue
 
         if stop.get("solver_data") and not force:
+            print(f"[INFO] Skipping stop '{stop.get('place_name', 'Unknown')}' - solver_data exists and force is false.") # Verbose log
             enriched.append(stop)
             continue
 
@@ -154,17 +160,18 @@ def enrich_simple_stops(stops: List[Dict[str, Any]], itinerary_title: str = "Iti
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Enrich cloneable_adventures stops with solver tags.")
+    parser = argparse.ArgumentParser(description="Enrich Supabase rows with solver tags.")
     parser.add_argument("--limit", type=int, default=100, help="Rows to process (batch size)")
     parser.add_argument("--offset", type=int, default=0, help="Offset for pagination (start row)")
     parser.add_argument("--force", action="store_true", help="Recompute even if solver_data exists")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Supabase")
-    parser.add_argument("--table", type=str, default="cloneable_adventures", help="Supabase table name")
-    parser.add_argument("--stops-field", type=str, default="stops", help="Column containing stops array")
-    parser.add_argument("--pk-field", type=str, default="source_id", help="Primary key column to update against")
+    parser.add_argument("--table", type=str, default="lemon8_articles", help="Supabase table name") # Changed default
+    parser.add_argument("--stops-field", type=str, default="itinerary_data", help="Column containing stops array") # Changed default
+    parser.add_argument("--pk-field", type=str, default="url", help="Primary key column to update against (defaults to url for lemon8_articles)") # Changed default
     parser.add_argument("--title-field", type=str, default="title", help="Title column (blank to skip)")
     parser.add_argument("--subtitle-field", type=str, default="subtitle", help="Subtitle column (blank to skip)")
-    parser.add_argument("--output-field", type=str, default=None, help="Column to write enriched stops to (defaults to stops-field)")
+    parser.add_argument("--output-field", type=str, default="enriched_itinerary_data", help="Column to write enriched stops to (defaults to stops-field)") # Changed default
+    parser.add_argument("--url", type=str, help="Process only a specific article URL") # Added --url argument
     args = parser.parse_args()
 
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -175,17 +182,22 @@ def main():
         raise SystemExit("Supabase client not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY.")
 
     print(f"[INFO] Fetching up to {args.limit} rows from {args.table} (offset {args.offset})…")
+    
     select_cols = [args.pk_field, args.stops_field]
-    if args.title_field and args.title_field.lower() != "none":
-        select_cols.append(args.title_field)
-    # Keep new_title if present; harmless if missing because PostgREST ignores unknown selects? It raises error.
-    # To be safe, only include if user explicitly sets it.
-    # We'll include subtitle_field similarly.
-    if args.subtitle_field and args.subtitle_field.lower() != "none":
-        select_cols.append(args.subtitle_field)
+    # Only include title/subtitle fields in select_cols if table is not lemon8_articles
+    if args.table != "lemon8_articles":
+        if args.title_field and args.title_field.lower() != "none":
+            select_cols.append(args.title_field)
+        if args.subtitle_field and args.subtitle_field.lower() != "none":
+            select_cols.append(args.subtitle_field)
+
+    query = supabase.table(args.table).select(",".join(select_cols))
+    
+    if args.url:
+        query = query.eq(args.pk_field, args.url)
+
     res = (
-        supabase.table(args.table)
-        .select(",".join(select_cols))
+        query
         .order(args.pk_field, desc=False)
         .range(args.offset, args.offset + args.limit - 1)
         .execute()
@@ -194,6 +206,8 @@ def main():
     print(f"[INFO] Retrieved {len(rows)} rows")
 
     for row in rows:
+        print(f"\n[DEBUG] Processing row with PK '{row.get(args.pk_field)}':\n{json.dumps(row, indent=2)}") # Verbose log
+
         stops_raw = row.get(args.stops_field) or []
 
         stops_key = None
@@ -207,12 +221,19 @@ def main():
             stops = stops_raw.get(stops_key) or []
         else:
             stops = stops_raw
+        print(f"[DEBUG] Parsed stops_raw:\n{json.dumps(stops_raw, indent=2)}") # Verbose log
+        print(f"[DEBUG] Extracted stops:\n{json.dumps(stops, indent=2)}") # Verbose log
 
-        title_source = None
-        if args.title_field and args.title_field.lower() != "none":
-            title_source = row.get(args.title_field)
-        title = row.get("new_title") or title_source or "Itinerary"
+        title = "Itinerary" # Default title
+        # If processing lemon8_articles, extract title from enriched_itinerary_data
+        if args.table == "lemon8_articles" and isinstance(stops_raw, dict):
+            title = stops_raw.get("itinerary_title") or title
+        elif args.title_field and args.title_field.lower() != "none":
+            title = row.get("new_title") or row.get(args.title_field) or title
+        print(f"[DEBUG] Itinerary Title for LLM: {title}") # Verbose log
+
         updated_stops = enrich_stops(stops, title, force=args.force)
+        print(f"[DEBUG] Updated stops after enrichment:\n{json.dumps(updated_stops, indent=2)}") # Verbose log
 
         if args.dry_run:
             print(f"\n[DRY RUN] {row.get('id') or row.get('source_id')} — first stop solver_data:")
@@ -232,6 +253,10 @@ def main():
                 new_value = {**stops_raw}
             else:
                 new_value = updated_stops
+            print(f"[DEBUG] New value for {target_field}:\n{json.dumps(new_value, indent=2)}") # Verbose log
+
+            payload = {target_field: new_value}
+            print(f"[DEBUG] Supabase Update Payload:\n{json.dumps(payload, indent=2)}") # Verbose log
 
             supabase.table(args.table).update({target_field: new_value}).eq(pk_field, pk_value).execute()
         except Exception as e:
@@ -242,4 +267,3 @@ def main():
 
 if __name__ == "__main__":
   main()
-

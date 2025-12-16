@@ -1,4 +1,4 @@
-\"\"\"Scout: Discovers Lemon8 article URLs and adds them to Supabase queue\"\"\"
+"""Scout: Discovers Lemon8 article URLs and adds them to Supabase queue"""
 import os
 import sys
 import json
@@ -50,10 +50,10 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # ============================================================================
 
 def fetch_location_strategy(location_name):
-    \"\"\"
+    """
     Uses LLM to determine if the input is a City or a Region.
-    \"\"\"
-    print(f"\\n🧠 Analyzing location: {location_name}...", flush=True)
+    """
+    print(f"\nAI Analyzing location: {location_name}...", flush=True)
 
     if not os.getenv("OPENROUTER_API_KEY"):
         print("⚠ No API Key. Using fallback.", flush=True)
@@ -65,7 +65,7 @@ def fetch_location_strategy(location_name):
             }
         return {"type": "city", "neighborhoods": ["Downtown"], "local_foods": ["food"], "landmarks": []}
 
-    prompt = f\"\"\"
+    prompt = f"""
     I am building a travel guide for "{location_name}".
     
     Determine if this is a SPECIFIC CITY (like "Austin", "Brooklyn") or a BROAD REGION/COUNTRY (like "USA", "California", "Italy").
@@ -85,7 +85,7 @@ def fetch_location_strategy(location_name):
         "local_foods": ["List of 5 iconic local dishes"],
         "landmarks": ["List of 5 instagrammable spots"]
     }}
-    \"\"\"
+    """
 
     headers = {
         "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
@@ -121,16 +121,16 @@ def fetch_location_strategy(location_name):
     # Fallback if LLM fails
     return {"type": "city", "neighborhoods": [], "local_foods": [], "landmarks": []}
 
-def generate_seed_urls_recursive(location_name):\
-    \"\"\"
+def generate_seed_urls_recursive(location_name):
+    """
     Recursively generates URLs. 
-    \"\"\"
+    """
     strategy = fetch_location_strategy(location_name)
     all_urls = []
 
     if strategy.get("type") == "region":
         cities = strategy.get("target_cities", [])
-        print(f"🌎 Region detected! Auto-expanding to cities: {cities}", flush=True)
+        print(f"REGION Region detected! Auto-expanding to cities: {cities}", flush=True)
         
         # Shuffle cities so we don't always start with the same one in case of timeout
         random.shuffle(cities)
@@ -149,14 +149,14 @@ def generate_seed_urls_recursive(location_name):\
             time.sleep(1) 
 
     else:
-        print(f"🏙️  City detected. Generating Vibe Map for {location_name}...", flush=True)
+        print(f"CITY  City detected. Generating Vibe Map for {location_name}...", flush=True)
         urls = generate_seed_urls_from_profile(location_name, strategy)
         all_urls.extend(urls)
 
     return list(set(all_urls))
 
 def generate_seed_urls_from_profile(city_name, profile):
-    \"\"\"Generates actual URLs from a city profile\"\"\"
+    """Generates actual URLs from a city profile"""
     base_url = "https://www.lemon8-app.com/discover/"
     all_urls = []
 
@@ -192,7 +192,7 @@ def generate_seed_urls_from_profile(city_name, profile):
 # ============================================================================
 
 def find_brave_path():
-    \"\"\"Find Brave browser executable\"\"\"
+    """Find Brave browser executable"""
     brave_paths = [
         r"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
         r"C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
@@ -205,7 +205,7 @@ def find_brave_path():
     return None
 
 def setup_driver(brave_path=None):
-    \"\"\"Setup Selenium WebDriver with Brave (or Chrome in CI)\"\"\"
+    """Setup Selenium WebDriver with Brave (or Chrome in CI)"""
     print("Setting up Chrome driver options...", flush=True)
 
     is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
@@ -242,7 +242,7 @@ def setup_driver(brave_path=None):
         raise
 
 def auto_scroll(driver, scroll_pause_time=0.5, max_scrolls=100):
-    \"\"\"Smoothly scroll down the page to load dynamic content\"\"\"
+    """Smoothly scroll down the page to load dynamic content"""
     last_height = driver.execute_script("return document.body.scrollHeight")
     scroll_count = 0
     no_change_count = 0
@@ -279,7 +279,7 @@ def is_valid_article_url(url):
     return bool(re.search(pattern, url))
 
 def discover_article_urls(driver, seed_url, max_scrolls=100):
-    print(f"\\n🔍 Discovering URLs from: {seed_url}", flush=True)
+    print(f"\nSEARCH Discovering URLs from: {seed_url}", flush=True)
     try:
         driver.get(seed_url)
         time.sleep(3)
@@ -332,29 +332,29 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60, flush=True)
-    print("🌱 LEMON8 SCOUT - URL Discovery", flush=True)
+    print("LEMON8 SCOUT - URL Discovery", flush=True)
     print("=" * 60, flush=True)
 
     # 1. Determine Seed URLs using recursive strategy
     seed_urls_to_check = []
 
     if args.manual_url:
-        print(f"📋 Using {len(args.manual_url)} manually provided URLs", flush=True)
+        print(f"URLS Using {len(args.manual_url)} manually provided URLs", flush=True)
         seed_urls_to_check = args.manual_url
 
     elif args.city:
-        print(f"🚀 Launching Scout for target: {args.city}", flush=True)
+        print(f"START Launching Scout for target: {args.city}", flush=True)
         seed_urls_to_check = generate_seed_urls_recursive(args.city)
     
     else:
         # AUTO-PILOT MODE
-        print("🌍 No city specified. ENGAGING AUTO-PILOT.", flush=True)
-        print("🚀 Asking LLM for trending travel destinations in 'United States'...", flush=True)
+        print("AUTO No city specified. ENGAGING AUTO-PILOT.", flush=True)
+        print("START Asking LLM for trending travel destinations in 'United States'...", flush=True)
         
         # This triggers the "Region" logic in the brain, which will find cities automatically
         seed_urls_to_check = generate_seed_urls_recursive("United States")
         
-        print(f"📋 Total generated seed URLs from Auto-Pilot: {len(seed_urls_to_check)}", flush=True)
+        print(f"URLS Total generated seed URLs from Auto-Pilot: {len(seed_urls_to_check)}", flush=True)
 
     if not seed_urls_to_check:
         print("✗ No seed URLs generated. Exiting.", flush=True)
@@ -393,12 +393,12 @@ def main():
                 current_index = len(seed_urls_to_check)
 
             if not batch:
-                print(f"\\n📊 Batch {batch_number}: All URLs already processed.", flush=True)
+                print(f"\\nBATCH Batch {batch_number}: All URLs already processed.", flush=True)
                 if current_index >= len(seed_urls_to_check): break
                 batch_number += 1
                 continue
 
-            print(f"\\n📊 Batch {batch_number}: Processing {len(batch)} URLs", flush=True)
+            print(f"\\nBATCH Batch {batch_number}: Processing {len(batch)} URLs", flush=True)
 
             for idx, seed_url in enumerate(batch, 1):
                 print(f"\\n[{idx}/{len(batch)}] Processing: {seed_url}", flush=True)

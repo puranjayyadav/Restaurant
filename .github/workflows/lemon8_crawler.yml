@@ -80,6 +80,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           # Process first 20 URLs per run to avoid timeout (GitHub Actions has time limits)
           # The script will generate ~400+ URLs, but we'll process them in batches

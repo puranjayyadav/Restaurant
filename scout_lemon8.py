@@ -356,11 +356,9 @@ def main():
         print(f"📋 Total generated seed URLs: {len(seed_urls_to_check)}", flush=True)
         
     else:
-        # Default Fallback (New York if no args)
-        print("⚠ No city or manual URLs specified. Using default 'New York' fallback.", flush=True)
-        print("💡 Usage: python scout_lemon8.py --city 'Austin'", flush=True)
-        seed_urls_to_check = generate_seed_urls_recursive("New York")
-        print(f"📋 Total generated seed URLs: {len(seed_urls_to_check)}", flush=True)
+        print("❌ Error: No city or manual URLs specified.", flush=True)
+        print("💡 Usage: python scout_lemon8.py --city 'Austin' or --city 'California'", flush=True)
+        sys.exit(1)
 
     if not seed_urls_to_check:
         print("✗ No seed URLs generated. Exiting.", flush=True)

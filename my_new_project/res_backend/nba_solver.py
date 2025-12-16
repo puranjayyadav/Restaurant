@@ -678,18 +678,25 @@ class DynamicItinerarySolver(NBASolver):
             if sim_time.hour >= 4 and sim_time.hour < 6:
                 break
 
-            # Filter out already visited
-            available_places = [
-                p for p in places
-                if (p.get('place_id') or p.get('name')) not in used_place_ids
-            ]
+            # 1. Get previous step for category constraints
+            prev_step = itinerary[-1] if itinerary else None
+            
+            # 2. Apply category constraints (prevents 3 dinners in a row)
+            available_places = self._get_constrained_places(places, used_place_ids, prev_step)
+            
+            if not available_places:
+                # Fallback: if constraints leave nothing, use all unvisited
+                available_places = [
+                    p for p in places
+                    if (p.get('place_id') or p.get('name')) not in used_place_ids
+                ]
+            
             if not available_places:
                 break
 
-            # Palette Cleanser: check for category fatigue
+            # 3. Palette Cleanser: check for category fatigue (2+ in a row)
             forced_categories = self._check_category_fatigue(category_history)
             if forced_categories:
-                # Prefer places matching the palette cleanser categories
                 preferred_places = self._filter_by_categories(available_places, forced_categories)
                 if preferred_places:
                     available_places = preferred_places
@@ -736,6 +743,91 @@ class DynamicItinerarySolver(NBASolver):
                 used_place_ids.add(place_id)
 
         return itinerary
+
+    def _get_constrained_places(
+        self, 
+        places: List[Dict], 
+        used_ids: Set[str], 
+        prev_step: Optional[Dict] = None
+    ) -> List[Dict]:
+        """
+        Filters places to ensure variety in the rolling chain.
+        
+        The "Gluttony Bug" fix: Prevents 3 dinners in a row.
+        Nobody can physically eat 3 full meals in 4 hours.
+        
+        Rules:
+        - After 'food', suggest non-food (coffee, activity, nightlife)
+        - After 'drinking', allow more drinking OR suggest food (late night munchies)
+        - After 'dessert', suggest activity or culture
+        """
+        # 1. Standard Filter: Remove already visited places
+        candidates = [
+            p for p in places 
+            if (p.get('place_id') or p.get('name')) not in used_ids
+        ]
+        
+        if not prev_step or not candidates:
+            return candidates
+        
+        # 2. Logic Gate: "The Palette Cleanser"
+        prev_group = prev_step.get('category_group', 'general')
+        prev_category = prev_step.get('category', 'general')
+        
+        # Rule A: No back-to-back full meals (food group)
+        # After a restaurant/dinner/lunch, suggest non-food
+        if prev_group == 'food' and prev_category not in ['cafe', 'coffee', 'bakery']:
+            non_food = [
+                p for p in candidates 
+                if self._get_place_category_group(p) != 'food'
+            ]
+            # Only apply constraint if we have alternatives
+            if non_food:
+                candidates = non_food
+                print(f"DEBUG: Category constraint - blocked food after {prev_category}, {len(non_food)} alternatives")
+        
+        # Rule B: After dessert, suggest activity or culture (walk it off!)
+        elif prev_group == 'dessert':
+            non_dessert = [
+                p for p in candidates 
+                if self._get_place_category_group(p) not in ['dessert', 'food']
+            ]
+            if non_dessert:
+                candidates = non_dessert
+        
+        # Rule C: After drinking, allow more drinking OR food (late night munchies)
+        # No constraint - people bar hop, and they get hungry
+        
+        # Rule D: After coffee, suggest food or activity (not more coffee)
+        elif prev_group == 'coffee':
+            non_coffee = [
+                p for p in candidates 
+                if self._get_place_category_group(p) != 'coffee'
+            ]
+            if non_coffee:
+                candidates = non_coffee
+        
+        return candidates
+    
+    def _get_place_category_group(self, place: Dict) -> str:
+        """Get category group for a place (for constraint checking)."""
+        # Check category_normalized from solver_data first
+        solver_data = place.get('solver_data', {})
+        cat_normalized = solver_data.get('category_normalized', '').lower()
+        
+        # Map category_normalized to groups
+        if cat_normalized in ['dinner', 'lunch', 'brunch', 'breakfast', 'restaurant']:
+            return 'food'
+        if cat_normalized in ['bar', 'club', 'lounge', 'nightlife']:
+            return 'drinking'
+        if cat_normalized in ['coffee', 'cafe', 'tea']:
+            return 'coffee'
+        if cat_normalized in ['dessert', 'bakery', 'ice cream']:
+            return 'dessert'
+        
+        # Fallback to inferring from types/name
+        category = self._infer_category(place)
+        return self._get_category_group(category)
 
     def _check_category_fatigue(self, history: List[str], threshold: int = 2) -> Optional[List[str]]:
         """

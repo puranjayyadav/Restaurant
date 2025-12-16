@@ -24,6 +24,7 @@ from .utils import (
     filter_directional_places, get_time_context_query, get_time_context_label
 )
 from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
+from .scraping_service import get_cached_or_scraped_places
 from .nba_solver import NBASolver, DynamicItinerarySolver
 import uuid
 import json
@@ -3350,29 +3351,43 @@ def next_best_action(request):
         heading = data.get('heading')  # Optional
         timestamp_str = data.get('timestamp')
         
-        # Parse timestamp or use now
+        # Parse timestamp or use now (with timezone handling)
+        # Accept optional timezone_offset in minutes (e.g., -300 for EST)
+        # Default to EST (-5 hours) for NYC area if not provided
+        timezone_offset_minutes = data.get('timezone_offset')
+        
         if timestamp_str:
-            from datetime import datetime
+            from datetime import datetime, timedelta as td
             current_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            if current_time.tzinfo is None:
-                from django.utils import timezone
-                current_time = timezone.now()
+            # Apply timezone offset if provided
+            if timezone_offset_minutes is not None:
+                current_time = current_time + td(minutes=int(timezone_offset_minutes))
         else:
             from django.utils import timezone
-            current_time = timezone.now()
+            from datetime import timedelta as td
+            utc_now = timezone.now()
+            
+            # Convert to local time
+            # If timezone_offset provided, use it; otherwise default to EST (-300 minutes)
+            if timezone_offset_minutes is not None:
+                offset_minutes = int(timezone_offset_minutes)
+            else:
+                # Default to EST (UTC-5) = -300 minutes
+                # TODO: Could auto-detect from coordinates using timezonefinder
+                offset_minutes = -300
+            
+            current_time = utc_now + td(minutes=offset_minutes)
+            print(f"DEBUG: Time conversion - UTC: {utc_now.strftime('%H:%M')}, Local (offset {offset_minutes}): {current_time.strftime('%H:%M')}")
         
         # Calculate geohash and time context
         geohash = get_geohash(latitude, longitude, precision=7)
         time_context = get_time_context_label(current_time.hour)
         query_context = time_context
         
-        # Check cache first
-        cached_places = get_cached_places(geohash, query_context) or []
-
+        # Check cache first, auto-scrape on miss
         def _has_coords(place: dict) -> bool:
             def _is_number(val):
                 return val is not None
-
             if 'lat' in place and ('lng' in place or 'long' in place):
                 return _is_number(place.get('lat')) and _is_number(place.get('lng') or place.get('long'))
             if 'geometry' in place and 'location' in place['geometry']:
@@ -3380,23 +3395,31 @@ def next_best_action(request):
                 return _is_number(loc.get('lat')) and _is_number(loc.get('lng') or loc.get('long'))
             return False
 
-        valid_places = [p for p in cached_places if _has_coords(p)]
-        cache_hit = bool(valid_places)
+        # Use scraping service that auto-scrapes on cache miss
+        all_places, cache_hit = get_cached_or_scraped_places(
+            lat=latitude,
+            lon=longitude,
+            query=None,  # Uses time-context based query
+            use_time_context=True,
+            radius_km=1.0
+        )
         
-        if cache_hit:
+        valid_places = [p for p in all_places if _has_coords(p)]
+        
+        if valid_places:
             places = valid_places
-            print(f"DEBUG: NBA cache HIT for {geohash}/{query_context} (valid={len(places)}, raw={len(cached_places)})")
+            print(f"DEBUG: NBA got {len(places)} valid places (cache_hit={cache_hit}, raw={len(all_places)})")
         else:
-            # Cache miss or empty/invalid cache - need to scrape (slow) so return hint
-            print(f"DEBUG: NBA cache MISS/EMPTY for {geohash}/{query_context} (raw_count={len(cached_places)})")
+            # Still no valid places after scrape attempt
+            print(f"DEBUG: NBA no valid places after scrape for {geohash}/{query_context}")
             return Response({
                 "next_stop": None,
                 "backup_stop": None,
                 "context": time_context,
                 "confidence": 0.0,
-                "cache_hit": False,
+                "cache_hit": cache_hit,
                 "response_time_ms": int((time.time() - start_time) * 1000),
-                "message": "No cached data available. Please use /api/get_personalized_recommendations/ to trigger scraping first."
+                "message": "No places found for this location."
             }, status=status.HTTP_200_OK)
         
         # Apply directional filter if heading provided

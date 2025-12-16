@@ -419,6 +419,7 @@ class DynamicItinerarySolver(NBASolver):
     """
     Rolling-chain itinerary solver.
     Simulates future steps by advancing time/location after each recommended stop.
+    Includes "Palette Cleanser" logic to avoid category fatigue (e.g., bar-bar-bar).
     """
 
     DWELL_TIMES = {
@@ -431,7 +432,24 @@ class DynamicItinerarySolver(NBASolver):
         'lunch': 60,
         'dinner': 90,
         'bar': 60,
+        'food': 45,
         'general': 60,
+    }
+
+    # Category groupings for fatigue detection
+    CATEGORY_GROUPS = {
+        'drinking': {'bar', 'pub', 'lounge', 'night_club', 'wine_bar', 'brewery'},
+        'food': {'restaurant', 'cafe', 'bakery', 'pizza', 'diner', 'fast_food', 'food'},
+        'coffee': {'coffee', 'cafe', 'tea'},
+        'culture': {'museum', 'art_gallery', 'theater', 'landmark'},
+        'outdoor': {'park', 'garden', 'beach', 'trail'},
+    }
+
+    # Palette cleanser rules: after N consecutive of group X, suggest group Y
+    PALETTE_CLEANSERS = {
+        'drinking': ['food', 'coffee'],  # After 2 bars, suggest food or coffee
+        'food': ['coffee', 'outdoor'],    # After 2 restaurants, suggest coffee or walk
+        'coffee': ['food', 'culture'],    # After 2 cafes, suggest food or museum
     }
 
     def generate_rolling_itinerary(
@@ -444,14 +462,20 @@ class DynamicItinerarySolver(NBASolver):
     ) -> List[Dict]:
         """
         Generate a multi-step chain (A -> B -> C) using simulated future states.
+        Includes category fatigue avoidance ("Palette Cleanser" logic).
         """
         itinerary: List[Dict] = []
         sim_location = user_location
         sim_heading = heading
         sim_time = current_time
         used_place_ids: Set[str] = set()
+        category_history: List[str] = []  # Track category sequence
 
         for i in range(max(1, steps)):
+            # End-of-night cutoff: stop suggesting after 4 AM
+            if sim_time.hour >= 4 and sim_time.hour < 6:
+                break
+
             # Filter out already visited
             available_places = [
                 p for p in places
@@ -459,6 +483,14 @@ class DynamicItinerarySolver(NBASolver):
             ]
             if not available_places:
                 break
+
+            # Palette Cleanser: check for category fatigue
+            forced_categories = self._check_category_fatigue(category_history)
+            if forced_categories:
+                # Prefer places matching the palette cleanser categories
+                preferred_places = self._filter_by_categories(available_places, forced_categories)
+                if preferred_places:
+                    available_places = preferred_places
 
             step_result = self.solve_next_action(
                 user_location=sim_location,
@@ -471,11 +503,18 @@ class DynamicItinerarySolver(NBASolver):
             if not best_stop:
                 break
 
+            # Infer and track category
+            stop_category = self._infer_category(best_stop)
+            category_group = self._get_category_group(stop_category)
+            category_history.append(category_group)
+
             # Enrich with chain metadata
             best_stop = best_stop.copy()
             best_stop['step_sequence'] = i + 1
             best_stop['visit_context'] = get_time_context_label(sim_time.hour)
             best_stop['simulated_arrival'] = best_stop.get('estimated_arrival')
+            best_stop['category'] = stop_category
+            best_stop['category_group'] = category_group
             itinerary.append(best_stop)
 
             # Update simulation state
@@ -485,7 +524,7 @@ class DynamicItinerarySolver(NBASolver):
 
             distance_m = best_stop.get('distance_m') or 0
             travel_minutes = self._estimate_travel_minutes(distance_m)
-            dwell_minutes = self.DWELL_TIMES.get(self._infer_category(best_stop), 60)
+            dwell_minutes = self.DWELL_TIMES.get(stop_category, 60)
             sim_time = sim_time + timedelta(minutes=travel_minutes + dwell_minutes)
             sim_location = (place_lat, place_lon)
             sim_heading = None  # allow 360° after first hop
@@ -495,6 +534,38 @@ class DynamicItinerarySolver(NBASolver):
                 used_place_ids.add(place_id)
 
         return itinerary
+
+    def _check_category_fatigue(self, history: List[str], threshold: int = 2) -> Optional[List[str]]:
+        """
+        Check if we've had too many consecutive stops in the same category group.
+        Returns suggested palette cleanser categories, or None if no fatigue detected.
+        """
+        if len(history) < threshold:
+            return None
+
+        # Check last N entries for repetition
+        recent = history[-threshold:]
+        if len(set(recent)) == 1:  # All same category
+            fatigued_group = recent[0]
+            return self.PALETTE_CLEANSERS.get(fatigued_group)
+        return None
+
+    def _get_category_group(self, category: str) -> str:
+        """Map a specific category to its broader group."""
+        for group, members in self.CATEGORY_GROUPS.items():
+            if category in members:
+                return group
+        return 'general'
+
+    def _filter_by_categories(self, places: List[Dict], target_categories: List[str]) -> List[Dict]:
+        """Filter places to those matching target category groups."""
+        filtered = []
+        for place in places:
+            place_category = self._infer_category(place)
+            place_group = self._get_category_group(place_category)
+            if place_group in target_categories or place_category in target_categories:
+                filtered.append(place)
+        return filtered
 
     def _estimate_travel_minutes(self, distance_m: float) -> int:
         """Estimate walking travel minutes given distance (meters)."""

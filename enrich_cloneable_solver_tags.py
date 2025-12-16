@@ -172,6 +172,7 @@ def main():
     parser.add_argument("--subtitle-field", type=str, default="subtitle", help="Subtitle column (blank to skip)")
     parser.add_argument("--output-field", type=str, default="enriched_itinerary_data", help="Column to write enriched stops to (defaults to stops-field)") # Changed default
     parser.add_argument("--url", type=str, help="Process only a specific article URL") # Added --url argument
+    parser.add_argument("--city", type=str, help="Process only articles for a specific city (based on itinerary_data->>city)") # Added --city argument
     args = parser.parse_args()
 
     if not os.getenv("OPENROUTER_API_KEY"):
@@ -195,6 +196,11 @@ def main():
     
     if args.url:
         query = query.eq(args.pk_field, args.url)
+    
+    if args.city:
+        # For JSONB column, we use ->> operator to extract text and then filter
+        query = query.eq(f"{args.stops_field}->>city", args.city)
+
 
     res = (
         query

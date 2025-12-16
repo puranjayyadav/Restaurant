@@ -23,9 +23,8 @@ from .utils import (
     match_restaurant_with_postgres, enrich_restaurant_data,
     filter_directional_places, get_time_context_query, get_time_context_label
 )
-from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache, get_combined_places
-from .scraping_service import get_cached_or_scraped_places
-from .nba_solver import NBASolver, DynamicItinerarySolver
+from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
+from .nba_solver import NBASolver
 import uuid
 import json
 
@@ -3319,40 +3318,26 @@ def next_best_action(request):
     """
     Next Best Action (NBA) endpoint for real-time recommendations.
     
-    Returns next stop, backup stop, and rolling chain itinerary.
-    Uses hybrid data (curated + scraped), vibe matching, and time-context.
+    Returns only the next 2 steps (next stop + backup) instead of full itinerary.
+    Uses caching, directional filtering, and time-context to provide fast responses.
     
     Request body:
     {
         "latitude": 40.7306,
         "longitude": -73.9352,
-        "heading": 0.0,              // degrees (0-360, North=0), optional
-        "timestamp": "...",          // ISO format, optional (defaults to now)
-        "timezone_offset": -300,     // minutes from UTC, optional (default EST)
-        "steps": 4,                  // rolling chain steps, optional
-        "user_preferences": {        // optional, for personalization
-            "vibes": ["Romantic", "Cozy", "Intimate"],  // vibe tags to match
-            "cuisines": ["Italian", "Japanese"],         // preferred cuisines
-            "price_range": "$$"                          // $, $$, $$$, $$$$
-        }
+        "heading": 0.0,  // degrees (0-360, North=0), optional
+        "timestamp": "2024-01-15T13:15:00Z"  // ISO format, optional (defaults to now)
     }
     
     Response:
     {
         "next_stop": {...},
         "backup_stop": {...},
-        "context": "dinner",
+        "context": "lunch",
         "confidence": 0.85,
         "cache_hit": true,
-        "response_time_ms": 450,
-        "rolling_chain": [{step1}, {step2}, ...],
-        "data_sources": {"curated_yelp": 316, "curated_lemon8": 84, "scraped": 139}
+        "response_time_ms": 45
     }
-    
-    Vibe Matching:
-    - Places with matching vibe_tags get +15 points per match
-    - Vibes are also inferred from names (e.g., "wine bar" → "romantic")
-    - Common vibes: Cozy, Romantic, Quiet, Lively, Trendy, Casual, Upscale
     """
     import time
     start_time = time.time()
@@ -3365,47 +3350,29 @@ def next_best_action(request):
         heading = data.get('heading')  # Optional
         timestamp_str = data.get('timestamp')
         
-        # User preferences for personalization (vibes, cuisines, price range)
-        # Example: {"vibes": ["Romantic", "Cozy"], "cuisines": ["Italian"], "price_range": "$$"}
-        user_preferences = data.get('user_preferences') or data.get('preferences')
-        
-        # Parse timestamp or use now (with timezone handling)
-        # Accept optional timezone_offset in minutes (e.g., -300 for EST)
-        # Default to EST (-5 hours) for NYC area if not provided
-        timezone_offset_minutes = data.get('timezone_offset')
-        
+        # Parse timestamp or use now
         if timestamp_str:
-            from datetime import datetime, timedelta as td
+            from datetime import datetime
             current_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            # Apply timezone offset if provided
-            if timezone_offset_minutes is not None:
-                current_time = current_time + td(minutes=int(timezone_offset_minutes))
+            if current_time.tzinfo is None:
+                from django.utils import timezone
+                current_time = timezone.now()
         else:
             from django.utils import timezone
-            from datetime import timedelta as td
-            utc_now = timezone.now()
-            
-            # Convert to local time
-            # If timezone_offset provided, use it; otherwise default to EST (-300 minutes)
-            if timezone_offset_minutes is not None:
-                offset_minutes = int(timezone_offset_minutes)
-            else:
-                # Default to EST (UTC-5) = -300 minutes
-                # TODO: Could auto-detect from coordinates using timezonefinder
-                offset_minutes = -300
-            
-            current_time = utc_now + td(minutes=offset_minutes)
-            print(f"DEBUG: Time conversion - UTC: {utc_now.strftime('%H:%M')}, Local (offset {offset_minutes}): {current_time.strftime('%H:%M')}")
+            current_time = timezone.now()
         
         # Calculate geohash and time context
         geohash = get_geohash(latitude, longitude, precision=7)
         time_context = get_time_context_label(current_time.hour)
         query_context = time_context
         
-        # Check cache first, auto-scrape on miss
+        # Check cache first
+        cached_places = get_cached_places(geohash, query_context) or []
+
         def _has_coords(place: dict) -> bool:
             def _is_number(val):
                 return val is not None
+
             if 'lat' in place and ('lng' in place or 'long' in place):
                 return _is_number(place.get('lat')) and _is_number(place.get('lng') or place.get('long'))
             if 'geometry' in place and 'location' in place['geometry']:
@@ -3413,44 +3380,23 @@ def next_best_action(request):
                 return _is_number(loc.get('lat')) and _is_number(loc.get('lng') or loc.get('long'))
             return False
 
-        # HYBRID DATA STRATEGY: Merge Curated (Quality) + Scraped (Quantity)
+        valid_places = [p for p in cached_places if _has_coords(p)]
+        cache_hit = bool(valid_places)
         
-        # 1. Get scraped places (auto-scrapes on cache miss)
-        scraped_places, cache_hit = get_cached_or_scraped_places(
-            lat=latitude,
-            lon=longitude,
-            query=None,  # Uses time-context based query
-            use_time_context=True,
-            radius_km=1.0
-        )
-        
-        # Filter scraped to valid coords only
-        valid_scraped = [p for p in scraped_places if _has_coords(p)]
-        
-        # 2. Merge with curated data (Lemon8 + Yelp)
-        combined_places, merge_stats = get_combined_places(
-            lat=latitude,
-            lon=longitude,
-            scraped_places=valid_scraped,
-            radius_km=2.0  # Wider radius for curated data
-        )
-        
-        if combined_places:
-            places = combined_places
-            curated_count = merge_stats.get('curated_lemon8', 0) + merge_stats.get('curated_yelp', 0)
-            print(f"DEBUG: NBA combined {len(places)} places (curated={curated_count}, scraped={merge_stats.get('scraped', 0)}, cache_hit={cache_hit})")
+        if cache_hit:
+            places = valid_places
+            print(f"DEBUG: NBA cache HIT for {geohash}/{query_context} (valid={len(places)}, raw={len(cached_places)})")
         else:
-            # No places from any source
-            print(f"DEBUG: NBA no places found for {latitude},{longitude}")
+            # Cache miss or empty/invalid cache - need to scrape (slow) so return hint
+            print(f"DEBUG: NBA cache MISS/EMPTY for {geohash}/{query_context} (raw_count={len(cached_places)})")
             return Response({
                 "next_stop": None,
                 "backup_stop": None,
                 "context": time_context,
                 "confidence": 0.0,
-                "cache_hit": cache_hit,
+                "cache_hit": False,
                 "response_time_ms": int((time.time() - start_time) * 1000),
-                "message": "No places found for this location.",
-                "merge_stats": merge_stats
+                "message": "No cached data available. Please use /api/get_personalized_recommendations/ to trigger scraping first."
             }, status=status.HTTP_200_OK)
         
         # Apply directional filter if heading provided
@@ -3467,33 +3413,19 @@ def next_best_action(request):
             else:
                 print("DEBUG: Directional filter returned 0 places; using unfiltered set")
         
-        # Solve for next best action (with vibe/preference matching)
+        # Solve for next best action
         solver = NBASolver()
         result = solver.solve_next_action(
             user_location=(latitude, longitude),
             heading=float(heading) if heading is not None else None,
             current_time=current_time,
             places=places,
-            user_preferences=user_preferences
-        )
-
-        # Generate rolling chain (simulated future steps)
-        chain_steps = int(data.get('steps', 4) or 4)
-        chain_solver = DynamicItinerarySolver()
-        rolling_chain = chain_solver.generate_rolling_itinerary(
-            user_location=(latitude, longitude),
-            heading=float(heading) if heading is not None else None,
-            current_time=current_time,
-            places=places,
-            steps=chain_steps,
-            user_preferences=user_preferences
+            user_preferences=None  # TODO: Add user preferences support
         )
         
         response_time_ms = int((time.time() - start_time) * 1000)
         result['cache_hit'] = cache_hit
         result['response_time_ms'] = response_time_ms
-        result['rolling_chain'] = rolling_chain
-        result['data_sources'] = merge_stats  # Show curated vs scraped breakdown
         
         return Response(result, status=status.HTTP_200_OK)
         

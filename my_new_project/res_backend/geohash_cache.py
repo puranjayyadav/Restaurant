@@ -373,6 +373,101 @@ def get_curated_from_yelp_restaurants(lat: float, lon: float, radius_km: float =
         return []
 
 
+def spatial_deduplicate_places(places: List[Dict], distance_threshold_m: float = 50.0, name_similarity_threshold: float = 0.6) -> List[Dict]:
+    """
+    Deduplicate places using spatial proximity + fuzzy name matching.
+    
+    The "Doppelgänger Bug" fix: "Da Andrea - Chelsea" and "Da Andrea" at same location
+    should be merged, not treated as separate places.
+    
+    Args:
+        places: List of place dicts with lat/lng
+        distance_threshold_m: Max distance in meters to consider same place (default 50m)
+        name_similarity_threshold: Min name similarity ratio (0-1) to merge (default 0.6)
+    
+    Returns:
+        Deduplicated list, keeping the place with most data (hours, types, etc.)
+    """
+    from difflib import SequenceMatcher
+    from .utils import haversine_distance
+    
+    if not places:
+        return []
+    
+    unique_places = []
+    merged_count = 0
+    
+    for p in places:
+        p_lat = p.get('lat')
+        p_lng = p.get('lng')
+        p_name = (p.get('name') or '').lower().strip()
+        
+        if p_lat is None or p_lng is None:
+            unique_places.append(p)
+            continue
+        
+        is_duplicate = False
+        
+        for existing in unique_places:
+            e_lat = existing.get('lat')
+            e_lng = existing.get('lng')
+            
+            if e_lat is None or e_lng is None:
+                continue
+            
+            # 1. Check Distance (Physics doesn't lie)
+            dist = haversine_distance(float(p_lat), float(p_lng), float(e_lat), float(e_lng))
+            
+            if dist < distance_threshold_m:
+                # 2. Check Name Similarity
+                e_name = (existing.get('name') or '').lower().strip()
+                similarity = SequenceMatcher(None, p_name, e_name).ratio()
+                
+                if similarity > name_similarity_threshold:
+                    # MERGE: Keep the one with more data
+                    # Prefer: has hours > has more types > is_curated > higher rating
+                    p_score = _data_richness_score(p)
+                    e_score = _data_richness_score(existing)
+                    
+                    if p_score > e_score:
+                        # New place has more data, update existing with it
+                        # But preserve existing's place_id if it's a Google ID (starts with ChIJ)
+                        old_id = existing.get('place_id', '')
+                        existing.update(p)
+                        if old_id.startswith('ChIJ'):
+                            existing['place_id'] = old_id
+                    
+                    merged_count += 1
+                    is_duplicate = True
+                    break
+        
+        if not is_duplicate:
+            unique_places.append(p)
+    
+    if merged_count > 0:
+        print(f"DEBUG: Spatial dedup merged {merged_count} duplicate places (threshold={distance_threshold_m}m)")
+    
+    return unique_places
+
+
+def _data_richness_score(place: Dict) -> int:
+    """Score how much useful data a place has (for merge priority)."""
+    score = 0
+    if place.get('hours') or place.get('opening_hours'):
+        score += 10  # Hours are critical
+    if place.get('types') and len(place.get('types', [])) > 1:
+        score += 3
+    if place.get('is_curated'):
+        score += 5
+    if place.get('rating') and float(place.get('rating', 0)) > 0:
+        score += 2
+    if place.get('address'):
+        score += 1
+    if place.get('source') == 'yelp':
+        score += 3  # Yelp data is richer
+    return score
+
+
 def get_combined_places(
     lat: float, 
     lon: float, 
@@ -382,7 +477,8 @@ def get_combined_places(
     """
     Merge Curated Data (Quality) with Scraped Data (Quantity).
     
-    Deduplicates by place_id/name, prioritizing curated versions.
+    Uses spatial deduplication to avoid the "Doppelgänger Bug" where
+    the same place appears twice with slightly different names.
     
     Args:
         lat: User latitude
@@ -397,7 +493,7 @@ def get_combined_places(
     seen_ids = set()
     seen_names = set()
     
-    stats = {"curated_lemon8": 0, "curated_yelp": 0, "scraped": 0, "duplicates_skipped": 0}
+    stats = {"curated_lemon8": 0, "curated_yelp": 0, "scraped": 0, "duplicates_skipped": 0, "spatial_merged": 0}
     
     # 1. First, add Yelp curated (best quality - has hours)
     yelp_curated = get_curated_from_yelp_restaurants(lat, lon, radius_km)
@@ -460,7 +556,13 @@ def get_combined_places(
             seen_names.add(name_key)
         stats["scraped"] += 1
     
-    print(f"DEBUG: Combined places - Yelp:{stats['curated_yelp']}, Lemon8:{stats['curated_lemon8']}, Scraped:{stats['scraped']}, Dupes:{stats['duplicates_skipped']}")
+    # 4. SPATIAL DEDUPLICATION - Fix the "Doppelgänger Bug"
+    # Merge places within 50m that have similar names
+    pre_dedup_count = len(combined)
+    combined = spatial_deduplicate_places(combined, distance_threshold_m=50.0, name_similarity_threshold=0.6)
+    stats["spatial_merged"] = pre_dedup_count - len(combined)
+    
+    print(f"DEBUG: Combined places - Yelp:{stats['curated_yelp']}, Lemon8:{stats['curated_lemon8']}, Scraped:{stats['scraped']}, String-Dupes:{stats['duplicates_skipped']}, Spatial-Merged:{stats['spatial_merged']}")
     
     return combined, stats
 

@@ -272,6 +272,9 @@ class NBASolver:
         """
         Check if place is open now based on hours data.
         
+        Includes "Category Curfews" - common-sense rules for when places
+        are likely closed even without explicit hours data.
+        
         Args:
             place: Place dictionary
             current_time: Current datetime
@@ -280,12 +283,12 @@ class NBASolver:
             True if likely open, False otherwise
         """
         hours = place.get('hours') or place.get('opening_hours') or []
+        current_hour = current_time.hour
         
         if not hours:
-            # No hours data - assume open
-            return True
+            # No hours data - apply "Category Curfews" (common sense rules)
+            return self._apply_category_curfews(place, current_hour)
         
-        current_hour = current_time.hour
         current_minute = current_time.minute
         current_time_minutes = current_hour * 60 + current_minute
         
@@ -306,7 +309,64 @@ class NBASolver:
                         if self._parse_hours_string(hours_str, current_time_minutes):
                             return True
         
-        # If can't determine, assume open (conservative)
+        # If can't determine from hours data, fall back to category curfews
+        return self._apply_category_curfews(place, current_hour)
+    
+    def _apply_category_curfews(self, place: Dict, current_hour: int) -> bool:
+        """
+        Apply common-sense "curfews" when hours data is missing.
+        
+        The "Night Bloom Bug" fix: Flower markets and bakeries shouldn't
+        appear as suggestions at 10 PM even if we don't have explicit hours.
+        
+        Args:
+            place: Place dictionary
+            current_hour: Current hour (0-23)
+        
+        Returns:
+            True if place is likely open, False if likely closed
+        """
+        # Get all category/type info from place
+        types = place.get('types') or place.get('categories') or []
+        name = (place.get('name') or '').lower()
+        
+        # Combine types and name for checking
+        category_text = ' '.join([str(t).lower() for t in types]) + ' ' + name
+        
+        # MORNING-ONLY places (closed after 9 PM)
+        morning_keywords = ['market', 'flower', 'bakery', 'breakfast', 'brunch', 'farmer']
+        if current_hour >= 21 or current_hour < 6:  # 9 PM - 6 AM
+            if any(kw in category_text for kw in morning_keywords):
+                return False
+        
+        # DAYTIME-ONLY places (closed after 10 PM)
+        daytime_keywords = ['museum', 'gallery', 'park', 'garden', 'bookstore', 'library', 'shop', 'store']
+        if current_hour >= 22 or current_hour < 8:  # 10 PM - 8 AM
+            if any(kw in category_text for kw in daytime_keywords):
+                return False
+        
+        # CAFE/COFFEE (typically close by 8-9 PM unless it's a bar-cafe)
+        coffee_keywords = ['coffee', 'cafe', 'café', 'espresso', 'tea house']
+        if current_hour >= 21 or current_hour < 6:  # 9 PM - 6 AM
+            if any(kw in category_text for kw in coffee_keywords):
+                # Unless it's also a bar
+                if 'bar' not in category_text and 'lounge' not in category_text:
+                    return False
+        
+        # LUNCH-ONLY places (closed after 4 PM)
+        lunch_keywords = ['lunch', 'deli', 'sandwich']
+        if current_hour >= 16 or current_hour < 10:  # 4 PM - 10 AM
+            if any(kw in category_text for kw in lunch_keywords):
+                # Unless it's a full restaurant
+                if 'restaurant' not in category_text and 'dinner' not in category_text:
+                    return False
+        
+        # LATE-NIGHT places (open late) - give them a pass
+        latenight_keywords = ['bar', 'pub', 'club', 'lounge', 'late night', '24 hour', '24h']
+        if any(kw in category_text for kw in latenight_keywords):
+            return True
+        
+        # Default: assume open
         return True
     
     def _parse_hours_string(self, hours_str: str, current_time_minutes: int) -> bool:
@@ -445,27 +505,60 @@ class DynamicItinerarySolver(NBASolver):
     Includes "Palette Cleanser" logic to avoid category fatigue (e.g., bar-bar-bar).
     """
 
+    # Dwell times by category (minutes)
+    # Expanded to handle real-world tags like "Cookies Details", "Neighborhood", "Activity"
     DWELL_TIMES = {
+        # Quick stops
         'coffee': 30,
-        'cafe': 45,
+        'cookies': 20,
+        'dessert': 25,
         'bakery': 20,
-        'park': 45,
-        'museum': 90,
-        'shopping': 60,
+        'ice cream': 20,
+        'snack': 15,
+        
+        # Medium stops
+        'cafe': 45,
+        'brunch': 75,
         'lunch': 60,
-        'dinner': 90,
+        'food': 60,
+        'restaurant': 75,
         'bar': 60,
-        'food': 45,
-        'general': 60,
+        'pub': 60,
+        'lounge': 60,
+        
+        # Long stops
+        'dinner': 90,
+        'fine dining': 120,
+        'museum': 90,
+        'gallery': 60,
+        'theater': 120,
+        
+        # Outdoor/Activity
+        'park': 45,
+        'garden': 45,
+        'neighborhood': 45,  # Walking around exploring
+        'activity': 60,
+        'shopping': 60,
+        'market': 45,
+        
+        # Hotels/Landmarks (quick look or passing through)
+        'hotel': 15,
+        'landmark': 20,
+        
+        # Default
+        'general': 45,
     }
 
     # Category groupings for fatigue detection
+    # Expanded to handle real-world category names
     CATEGORY_GROUPS = {
-        'drinking': {'bar', 'pub', 'lounge', 'night_club', 'wine_bar', 'brewery'},
-        'food': {'restaurant', 'cafe', 'bakery', 'pizza', 'diner', 'fast_food', 'food'},
-        'coffee': {'coffee', 'cafe', 'tea'},
-        'culture': {'museum', 'art_gallery', 'theater', 'landmark'},
-        'outdoor': {'park', 'garden', 'beach', 'trail'},
+        'drinking': {'bar', 'pub', 'lounge', 'night_club', 'wine_bar', 'brewery', 'cocktail', 'wine'},
+        'food': {'restaurant', 'cafe', 'bakery', 'pizza', 'diner', 'fast_food', 'food', 'brunch', 'lunch', 'dinner', 'sushi', 'italian', 'mexican', 'chinese', 'thai', 'indian'},
+        'coffee': {'coffee', 'tea', 'espresso'},
+        'dessert': {'cookies', 'dessert', 'ice cream', 'bakery', 'patisserie', 'cake', 'pastry'},
+        'culture': {'museum', 'art_gallery', 'gallery', 'theater', 'landmark', 'historical'},
+        'outdoor': {'park', 'garden', 'beach', 'trail', 'neighborhood', 'market', 'flower'},
+        'activity': {'activity', 'shopping', 'spa', 'gym', 'yoga', 'entertainment'},
     }
 
     # Palette cleanser rules: after N consecutive of group X, suggest group Y
@@ -597,12 +690,64 @@ class DynamicItinerarySolver(NBASolver):
         return max(5, int(round(seconds / 60.0)))
 
     def _infer_category(self, stop: Dict) -> str:
-        """Infer a coarse category from types for dwell-time lookup."""
-        types = stop.get('types') or []
-        for t in types:
-            lower_t = str(t).lower()
-            for key in self.DWELL_TIMES.keys():
-                if key in lower_t:
-                    return key
+        """
+        Infer a coarse category from types/name for dwell-time lookup.
+        
+        Handles real-world tags like "Cookies Details", "Food", "Neighborhood", "Activity".
+        """
+        types = stop.get('types') or stop.get('categories') or []
+        name = (stop.get('name') or '').lower()
+        
+        # Combine all text for matching
+        all_text = ' '.join([str(t).lower() for t in types]) + ' ' + name
+        
+        # Priority order for category detection
+        # IMPORTANT: Check culture/activity FIRST because "Cookies Details" 
+        # often appears in Yelp data (scraped from cookie consent banners)
+        # and would incorrectly classify galleries as dessert shops
+        category_keywords = [
+            # HIGHEST PRIORITY: Culture/Activities (check these first!)
+            ('museum', ['museum']),
+            ('gallery', ['gallery', 'art gallery', 'art space']),
+            ('theater', ['theater', 'theatre', 'cinema', 'playhouse']),
+            ('park', ['park', 'garden', 'botanical']),
+            ('market', ['market', 'flower market', 'farmer']),
+            ('hotel', ['hotel', 'inn', 'motel']),
+            ('landmark', ['landmark', 'monument', 'historic']),
+            
+            # HIGH PRIORITY: Specific food types
+            ('bar', ['bar', 'pub', 'tavern', 'cocktail', 'wine bar', 'brewery']),
+            ('lounge', ['lounge', 'club', 'nightclub', 'night club']),
+            ('sushi', ['sushi', 'japanese', 'ramen', 'izakaya']),
+            ('pizza', ['pizza', 'pizzeria']),
+            ('brunch', ['brunch']),
+            ('breakfast', ['breakfast']),
+            ('lunch', ['lunch', 'deli', 'sandwich']),
+            ('dinner', ['dinner', 'fine dining']),
+            
+            # MEDIUM PRIORITY: Generic categories
+            ('coffee', ['coffee', 'espresso', 'roaster', 'roastery']),
+            ('bakery', ['bakery', 'bread', 'croissant', 'boulangerie']),
+            ('ice cream', ['ice cream', 'gelato', 'frozen yogurt']),
+            ('dessert', ['dessert', 'cake', 'pastry', 'patisserie', 'sweets']),
+            
+            # LOWER PRIORITY: These appear in many places
+            ('neighborhood', ['neighborhood', 'neighbourhood', 'walking', 'explore']),
+            ('activity', ['activity', 'experience', 'tour']),
+            ('shopping', ['shopping', 'shop', 'store', 'boutique']),
+            ('restaurant', ['restaurant', 'bistro', 'eatery', 'kitchen', 'grill', 'trattoria']),
+            ('cafe', ['cafe', 'café', 'coffeehouse']),
+            ('food', ['food']),
+            
+            # LOWEST PRIORITY: Often from scraped artifacts
+            # "Cookies Details" from cookie consent banners - check LAST
+            ('cookies', ['cookies', 'cookie shop']),  # Only match if explicitly a cookie shop
+        ]
+        
+        for category, keywords in category_keywords:
+            if any(kw in all_text for kw in keywords):
+                return category
+        
+        # Default fallback
         return 'general'
 

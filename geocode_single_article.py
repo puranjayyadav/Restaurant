@@ -14,6 +14,9 @@ from supabase_config import get_supabase_client
 SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1.1"))  # Critical for Nominatim
 NOMINATIM_EMAIL = os.getenv("NOMINATIM_EMAIL", "").strip()
 
+# If your app is US-only, keep this 'us'. If global, remove it or make it dynamic.
+TARGET_COUNTRY_CODE = "us" 
+
 
 def clean_search_term(name: str) -> str:
     """
@@ -22,6 +25,8 @@ def clean_search_term(name: str) -> str:
     """
     if not name:
         return ""
+
+    original_name = name
 
     # 1. Remove special separators and replace with space
     name = re.sub(r'[|+\-:]', ' ', name)
@@ -37,48 +42,92 @@ def clean_search_term(name: str) -> str:
     for pattern in noise_patterns:
         clean = re.sub(pattern, '', clean, flags=re.IGNORECASE)
 
-    return clean.strip()
+    cleaned_result = clean.strip()
+    if not cleaned_result and original_name:
+        return original_name # Return original name if cleaned result is empty but original was not
+    return cleaned_result
 
 
-def search_place_by_name(query: str, max_retries: int = 2) -> Optional[Dict[str, Any]]:
+def search_place_by_name(query: str, city_context: str = None, max_retries: int = 2) -> Optional[Dict[str, Any]]:
     """
-    Geocode a place using OpenStreetMap Nominatim.
+    Geocode a place with strict City/Country validation.
     """
     if not query:
         return None
 
     headers = {
-        "User-Agent": f"res-geocode/1.0 ({NOMINATIM_EMAIL})" if NOMINATIM_EMAIL else "res-geocode/1.0"
+        "User-Agent": "Plandit-Geocoding-Worker/1.0 (contact@plandit.app)" 
     }
-    params = {"q": query, "format": "json", "limit": 1}
+    
+    # 1. Base Params
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": 1,
+        "addressdetails": 1  # IMPORTANT: This tells Nominatim to return the city/state/country breakdown
+    }
+
+    # 2. Strict Country Limiting (Prevents matches in Saudi Arabia/Ireland/Scotland)
+    if TARGET_COUNTRY_CODE:
+        params["countrycodes"] = TARGET_COUNTRY_CODE
 
     for attempt in range(max_retries + 1):
         try:
+            print(f"   [API] Query: '{query}' (Context: {city_context}), Attempt: {attempt + 1}")
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
                 headers=headers,
                 params=params,
-                timeout=15,
+                timeout=30 # Increased timeout to 30 seconds
             )
-            if resp.status_code != 200:
-                print(f"WARN: Nominatim {resp.status_code} for '{query}'")
-                if resp.status_code == 429:  # Rate limit hit
-                    time.sleep(5)
+            
+            if resp.status_code == 429:
+                time.sleep(5) 
                 continue
+            
+            if resp.status_code != 200:
+                print(f"   [WARN] Nominatim {resp.status_code} for '{query}'")
+                return None
 
             data = resp.json()
             if not data:
+                print(f"   [REJECT] No Nominatim result for '{query}'")
                 return None
 
-            top = data[0]
+            result = data[0]
+            address = result.get("address", {})
+
+            # --- VALIDATION STEP ---
+            # If we have a city context (e.g., "New York"), check if the result is actually near there.
+            if city_context:
+                # Get all address fields that might contain the city name
+                found_location = [
+                    address.get("city", ""),
+                    address.get("town", ""),
+                    address.get("village", ""),
+                    address.get("county", ""),
+                    address.get("state", "") 
+                ]
+                
+                # Check if our target city matches any part of the returned address
+                # We use specific string matching to be safe
+                is_match = any(city_context.lower() in loc.lower() for loc in found_location)
+                
+                if not is_match:
+                    print(f"   [REJECT] Found '{result.get('display_name')}' but it does not match city '{city_context}'")
+                    return None
+
             return {
-                "lat": float(top.get("lat")),
-                "lon": float(top.get("lon")),
-                "display_name": top.get("display_name"),
+                "lat": float(result.get("lat")),
+                "lon": float(result.get("lon")),
+                "display_name": result.get("display_name"),
+                "address": address
             }
-        except Exception as exc:
-            print(f"WARN: Nominatim error for '{query}': {exc}")
-            time.sleep(1.0)
+
+        except Exception as e:
+            print(f"   [ERR] Nominatim error for '{query}': {e}")
+            time.sleep(1)
+            
     return None
 
 
@@ -96,7 +145,7 @@ def geocode_article(url: str, force: bool = False):
     try:
         result = (
             supabase.table("lemon8_articles")
-            .select("url, enriched_itinerary_data, stops_lat, stops_lng")
+            .select("url, itinerary_data, enriched_itinerary_data, stops_lat, stops_lng") 
             .eq("url", url)
             .execute()
         )
@@ -117,7 +166,6 @@ def geocode_article(url: str, force: bool = False):
                 stops_lat_existing is not None and 
                 stops_lng_existing is not None and
                 isinstance(stops_lat_existing, list) and
-                isinstance(stops_lng_existing, list) and
                 len(stops_lat_existing) > 0 and 
                 len(stops_lng_existing) > 0 and
                 stops_lat_existing[0] is not None and
@@ -131,17 +179,24 @@ def geocode_article(url: str, force: bool = False):
         print(f"ERROR: Failed to fetch article: {exc}")
         return
 
-    # Handle data structure variants (list vs dict)
-    raw_data = article.get("enriched_itinerary_data")
-    if isinstance(raw_data, str):
-        raw_data = json.loads(raw_data)
+    # Use itinerary_data as the source
+    data = article.get("itinerary_data") 
+    print(f"[DEBUG] Type of itinerary_data: {type(data)}")
     
-    if isinstance(raw_data, list) and raw_data:
-        data = raw_data[0]
-    elif isinstance(raw_data, dict):
-        data = raw_data
-    else:
-        print("ERROR: Invalid enriched_itinerary_data format")
+    # Handle malformed itinerary_data specifically
+    if isinstance(data, list) and all(isinstance(item, str) for item in data) and "city" in data and "stops" in data:
+        print(f"WARNING: Malformed itinerary_data (list of keys) for {url[-50:]}: {data}. Skipping article.")
+        return
+    elif isinstance(data, str):
+        try:
+            data = json.loads(data)
+            print(f"[DEBUG] Successfully parsed string itinerary_data to dict.")
+        except json.JSONDecodeError:
+            print(f"ERROR: itinerary_data is a malformed JSON string for {url[-50:]}: {data}. Skipping article.")
+            return
+    
+    if not isinstance(data, dict):
+        print(f"ERROR: Invalid itinerary_data format (expected dict) for {url[-50:]}: {data}. Skipping article.")
         return
 
     city = data.get("city") or "New York"  # Default to NYC if missing for context
@@ -196,7 +251,7 @@ def geocode_article(url: str, force: bool = False):
             if len(candidate) < 3:
                 continue
 
-            result = search_place_by_name(candidate)
+            result = search_place_by_name(candidate, city_context=city) # Pass city_context
             used_query = candidate
             if result:
                 break
@@ -227,7 +282,7 @@ def geocode_article(url: str, force: bool = False):
         updated_data["stops"] = updated_stops
 
         payload = {
-            "enriched_itinerary_data": updated_data,
+            "enriched_itinerary_data": updated_data, 
             "stops_lat": stops_lat,
             "stops_lng": stops_lng,
         }
@@ -240,7 +295,7 @@ def geocode_article(url: str, force: bool = False):
             print(f"ERR: Save failed for {url}: {exc}")
 
 
-def geocode_unprocessed_articles(limit: int = 100):
+def geocode_unprocessed_articles(limit: int = 100, offset: int = 0):
     """
     Process all articles that haven't been geocoded yet (stops_lat or stops_lng are NULL or empty).
     """
@@ -254,10 +309,11 @@ def geocode_unprocessed_articles(limit: int = 100):
         # We'll filter client-side since Supabase OR queries for NULL are complex
         result = (
             supabase.table("lemon8_articles")
-            .select("url, enriched_itinerary_data, stops_lat, stops_lng")
-            .not_.is_("enriched_itinerary_data", "null")
+            .select("url, itinerary_data, enriched_itinerary_data, stops_lat, stops_lng") 
+            .not_.is_("itinerary_data", "null") 
             .order("created_at", desc=False)
-            .limit(limit * 2)  # Fetch more to account for filtering
+            .limit(limit * 2)  
+            .offset(offset)
             .execute()
         )
         
@@ -293,7 +349,7 @@ def geocode_unprocessed_articles(limit: int = 100):
                 print(f"ERROR: Failed to process article {url[-50:]}: {e}")
                 import traceback
                 traceback.print_exc()
-            print()  # Blank line between articles
+            print()  
             
     except Exception as exc:
         print(f"ERROR: Failed to fetch articles: {exc}")
@@ -307,18 +363,22 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage:")
         print("  python geocode_single_article.py <article_url> [--force]")
-        print("  python geocode_single_article.py --batch [--limit N]")
+        print("  python geocode_single_article.py --batch [--limit N] [--offset M]")
         sys.exit(1)
     
     if sys.argv[1] == "--batch":
         limit = 100  # default
+        offset = 0   # default
         if "--limit" in sys.argv:
             limit_idx = sys.argv.index("--limit")
             if limit_idx + 1 < len(sys.argv) and sys.argv[limit_idx + 1].isdigit():
                 limit = int(sys.argv[limit_idx + 1])
-        geocode_unprocessed_articles(limit=limit)
+        if "--offset" in sys.argv:
+            offset_idx = sys.argv.index("--offset")
+            if offset_idx + 1 < len(sys.argv) and sys.argv[offset_idx + 1].isdigit():
+                offset = int(sys.argv[offset_idx + 1])
+        geocode_unprocessed_articles(limit=limit, offset=offset)
     else:
         url = sys.argv[1]
         force = "--force" in sys.argv or "-f" in sys.argv
         geocode_article(url, force=force)
-

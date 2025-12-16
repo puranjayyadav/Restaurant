@@ -204,39 +204,110 @@ class NBASolver:
         # Total score
         total_score = rating_score + distance_score + time_match_score + open_now_score
         
+        # --- VIBE MATCHING (Works for ALL places) ---
+        # This is often MORE important than rating for date nights, work sessions, etc.
+        vibe_score = 0.0
+        
+        # Extract place's vibe tags (handle nested structure from solver_data)
+        place_vibes = (
+            place.get('vibe_tags') or 
+            place.get('solver_data', {}).get('vibe_tags') or 
+            place.get('tags') or 
+            []
+        )
+        place_vibes_lower = {str(v).lower() for v in place_vibes}
+        
+        # Also infer vibes from name/types if no explicit tags
+        place_name_lower = (place.get('name') or '').lower()
+        inferred_vibes = self._infer_vibes_from_place(place)
+        place_vibes_lower.update(inferred_vibes)
+        
+        if user_preferences:
+            # Support both 'vibes' (list) and 'vibe' (single)
+            target_vibes = user_preferences.get('vibes') or []
+            if user_preferences.get('vibe'):
+                target_vibes = target_vibes + [user_preferences.get('vibe')]
+            
+            target_vibes_lower = [str(v).lower() for v in target_vibes]
+            
+            for target in target_vibes_lower:
+                # Check for exact match
+                if target in place_vibes_lower:
+                    vibe_score += 15.0  # HUGE bonus for vibe match
+                # Check for partial/fuzzy match
+                elif any(target in pv or pv in target for pv in place_vibes_lower):
+                    vibe_score += 8.0  # Partial match bonus
+        
+        total_score += vibe_score
+        
         # --- CURATED BONUS ---
         # We trust our own hand-picked data more than scraped data
         if place.get('is_curated'):
-            # Massive boost: curated places are quality-vetted
+            # Boost: curated places are quality-vetted
             total_score += 15.0
             
             # Source bonus: Yelp-enriched curated data is even better (has hours)
             if place.get('source') == 'yelp':
-                total_score += 5.0  # Extra for having reliable hours data
-            
-            # Vibe match bonus (if user has vibe preferences)
-            if user_preferences and user_preferences.get('vibe'):
-                vibe_tags = place.get('vibe_tags') or []
-                if user_preferences['vibe'] in vibe_tags:
-                    total_score += 10.0
+                total_score += 5.0
             
             # Time bias match (if place has optimal time and it matches)
-            time_bias = place.get('time_bias')
+            time_bias = place.get('time_bias') or place.get('solver_data', {}).get('time_bias')
             if time_bias:
                 time_context = get_time_context_label(current_time.hour)
                 if time_bias.lower() in time_context.lower() or time_context.lower() in time_bias.lower():
                     total_score += 5.0
         
-        # User preference bonus (optional, up to +10 points)
+        # --- CUISINE/CATEGORY PREFERENCES ---
         if user_preferences:
             # Check cuisine match
-            if user_preferences.get('preferred_cuisines'):
-                preferred = [c.lower() for c in user_preferences['preferred_cuisines']]
-                place_name = (place.get('name') or '').lower()
-                if any(cuisine in place_name for cuisine in preferred):
+            preferred_cuisines = user_preferences.get('preferred_cuisines') or user_preferences.get('cuisines') or []
+            if preferred_cuisines:
+                preferred = [c.lower() for c in preferred_cuisines]
+                # Check against place name and types
+                place_text = place_name_lower + ' ' + ' '.join(place_types)
+                if any(cuisine in place_text for cuisine in preferred):
                     total_score += 10.0
+            
+            # Price range preference
+            if user_preferences.get('price_range'):
+                place_price = place.get('price_range') or place.get('price')
+                if place_price and user_preferences['price_range'] == place_price:
+                    total_score += 5.0
         
         return min(100.0, total_score)
+    
+    def _infer_vibes_from_place(self, place: Dict) -> set:
+        """
+        Infer vibe tags from place name and types when explicit tags are missing.
+        """
+        inferred = set()
+        name = (place.get('name') or '').lower()
+        types = ' '.join([str(t).lower() for t in (place.get('types') or [])])
+        text = name + ' ' + types
+        
+        # Vibe inference rules
+        vibe_keywords = {
+            'cozy': ['cozy', 'intimate', 'warm', 'fireplace', 'cottage'],
+            'romantic': ['romantic', 'date', 'candlelit', 'intimate', 'wine bar'],
+            'quiet': ['quiet', 'peaceful', 'zen', 'serene', 'calm'],
+            'lively': ['lively', 'buzzing', 'energetic', 'party', 'club'],
+            'trendy': ['trendy', 'hip', 'chic', 'instagram', 'aesthetic'],
+            'casual': ['casual', 'laid back', 'chill', 'relaxed', 'dive'],
+            'upscale': ['upscale', 'fine dining', 'luxury', 'elegant', 'michelin'],
+            'family': ['family', 'kid', 'children', 'friendly'],
+            'outdoor': ['outdoor', 'patio', 'rooftop', 'garden', 'terrace'],
+            'hidden gem': ['hidden', 'secret', 'speakeasy', 'underground'],
+            'local': ['local', 'neighborhood', 'authentic'],
+            'brunch spot': ['brunch', 'weekend', 'mimosa'],
+            'late night': ['late night', '24 hour', 'after hours', 'night owl'],
+            'work friendly': ['wifi', 'laptop', 'workspace', 'study'],
+        }
+        
+        for vibe, keywords in vibe_keywords.items():
+            if any(kw in text for kw in keywords):
+                inferred.add(vibe)
+        
+        return inferred
     
     def _filter_open_now(self, places: List[Dict], current_time: datetime) -> List[Dict]:
         """
@@ -574,11 +645,13 @@ class DynamicItinerarySolver(NBASolver):
         heading: Optional[float],
         current_time: datetime,
         places: List[Dict],
-        steps: int = 4
+        steps: int = 4,
+        user_preferences: Optional[Dict] = None
     ) -> List[Dict]:
         """
         Generate a multi-step chain (A -> B -> C) using simulated future states.
         Includes category fatigue avoidance ("Palette Cleanser" logic).
+        Respects user preferences (vibes, cuisines) throughout the chain.
         """
         itinerary: List[Dict] = []
         sim_location = user_location
@@ -613,7 +686,7 @@ class DynamicItinerarySolver(NBASolver):
                 heading=sim_heading,
                 current_time=sim_time,
                 places=available_places,
-                user_preferences=None
+                user_preferences=user_preferences  # Pass vibes/preferences through chain
             )
             best_stop = step_result.get('next_stop')
             if not best_stop:

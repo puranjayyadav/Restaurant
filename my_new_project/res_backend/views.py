@@ -3319,26 +3319,40 @@ def next_best_action(request):
     """
     Next Best Action (NBA) endpoint for real-time recommendations.
     
-    Returns only the next 2 steps (next stop + backup) instead of full itinerary.
-    Uses caching, directional filtering, and time-context to provide fast responses.
+    Returns next stop, backup stop, and rolling chain itinerary.
+    Uses hybrid data (curated + scraped), vibe matching, and time-context.
     
     Request body:
     {
         "latitude": 40.7306,
         "longitude": -73.9352,
-        "heading": 0.0,  // degrees (0-360, North=0), optional
-        "timestamp": "2024-01-15T13:15:00Z"  // ISO format, optional (defaults to now)
+        "heading": 0.0,              // degrees (0-360, North=0), optional
+        "timestamp": "...",          // ISO format, optional (defaults to now)
+        "timezone_offset": -300,     // minutes from UTC, optional (default EST)
+        "steps": 4,                  // rolling chain steps, optional
+        "user_preferences": {        // optional, for personalization
+            "vibes": ["Romantic", "Cozy", "Intimate"],  // vibe tags to match
+            "cuisines": ["Italian", "Japanese"],         // preferred cuisines
+            "price_range": "$$"                          // $, $$, $$$, $$$$
+        }
     }
     
     Response:
     {
         "next_stop": {...},
         "backup_stop": {...},
-        "context": "lunch",
+        "context": "dinner",
         "confidence": 0.85,
         "cache_hit": true,
-        "response_time_ms": 45
+        "response_time_ms": 450,
+        "rolling_chain": [{step1}, {step2}, ...],
+        "data_sources": {"curated_yelp": 316, "curated_lemon8": 84, "scraped": 139}
     }
+    
+    Vibe Matching:
+    - Places with matching vibe_tags get +15 points per match
+    - Vibes are also inferred from names (e.g., "wine bar" → "romantic")
+    - Common vibes: Cozy, Romantic, Quiet, Lively, Trendy, Casual, Upscale
     """
     import time
     start_time = time.time()
@@ -3350,6 +3364,10 @@ def next_best_action(request):
         longitude = float(data.get('longitude'))
         heading = data.get('heading')  # Optional
         timestamp_str = data.get('timestamp')
+        
+        # User preferences for personalization (vibes, cuisines, price range)
+        # Example: {"vibes": ["Romantic", "Cozy"], "cuisines": ["Italian"], "price_range": "$$"}
+        user_preferences = data.get('user_preferences') or data.get('preferences')
         
         # Parse timestamp or use now (with timezone handling)
         # Accept optional timezone_offset in minutes (e.g., -300 for EST)
@@ -3449,14 +3467,14 @@ def next_best_action(request):
             else:
                 print("DEBUG: Directional filter returned 0 places; using unfiltered set")
         
-        # Solve for next best action
+        # Solve for next best action (with vibe/preference matching)
         solver = NBASolver()
         result = solver.solve_next_action(
             user_location=(latitude, longitude),
             heading=float(heading) if heading is not None else None,
             current_time=current_time,
             places=places,
-            user_preferences=None  # TODO: Add user preferences support
+            user_preferences=user_preferences
         )
 
         # Generate rolling chain (simulated future steps)
@@ -3467,7 +3485,8 @@ def next_best_action(request):
             heading=float(heading) if heading is not None else None,
             current_time=current_time,
             places=places,
-            steps=chain_steps
+            steps=chain_steps,
+            user_preferences=user_preferences
         )
         
         response_time_ms = int((time.time() - start_time) * 1000)

@@ -425,240 +425,261 @@ Return ONLY a JSON object: {{"category": "...", "confidence": 0.0-1.0}}
                 except (json.JSONDecodeError, KeyError) as e:
                     print(f"[WARNING] Failed to parse LLM response: {content[:100]}")
                     continue
-                    
-            elif response.status_code in (402, 429):
-                print(f"[INFO] Model {model} rate limited, trying next...")
-                continue
-            else:
-                print(f"[WARNING] {model} returned {response.status_code}")
-                continue
-                
-        except Exception as e:
-            print(f"[WARNING] LLM error with {model}: {e}")
-            continue
-    
-    # All models failed
-    return {"category": "Other", "confidence": 0.0}
+                    
+            elif response.status_code in (402, 429):
+                print(f"[INFO] Model {model} rate limited, trying next...")
+                continue
+            else:
+                print(f"[WARNING] {model} returned {response.status_code}")
+                continue
+                
+        except Exception as e:
+            print(f"[WARNING] LLM error with {model}: {e}")
+            continue
+    
+    # All models failed
+    return {"category": "Other", "confidence": 0.0}
+
 
+def fetch_places_needing_normalization(supabase: Client, limit: int = 100, article_url_filter: Optional[str] = None) -> List[Dict]:
+    """
+    Fetch places from lemon8_articles that have bad categories.
+    """
+    print(f"Fetching places with 'Cookies Details' or missing categories...")
+    
+    query = supabase.table("lemon8_articles") \
+        .select("url, enriched_itinerary_data") \
+        .not_.is_("enriched_itinerary_data", "null")
+    
+    if article_url_filter:
+        query = query.eq("url", article_url_filter)
+
+    response = query.limit(500).execute()
+    
+    places_to_fix = []
+    
+    for row in response.data or []:
+        data = row.get("enriched_itinerary_data")
+        if isinstance(data, list) and data:
+            data = data[0]
+        if not data:
+            continue
+        
+        article_url = row.get("url")
 
-def fetch_places_needing_normalization(supabase: Client, limit: int = 100) -> List[Dict]:
-    """
-    Fetch places from lemon8_articles that have bad categories.
-    """
-    print(f"Fetching places with 'Cookies Details' or missing categories...")
-    
-    response = (
-        supabase.table("lemon8_articles")
-        .select("url, enriched_itinerary_data")
-        .not_.is_("enriched_itinerary_data", "null")
-        .limit(500)  # Fetch more, filter locally
-        .execute()
-    )
-    
-    places_to_fix = []
-    
-    for row in response.data or []:
-        data = row.get("enriched_itinerary_data")
-        if isinstance(data, list) and data:
-            data = data[0]
-        if not data:
-            continue
-        
-        article_url = row.get("url")
-        
-        for i, stop in enumerate(data.get("stops", [])):
-            solver_data = stop.get("solver_data", {})
-            category = solver_data.get("category_normalized", "")
-            
-            # Check if this needs fixing
-            needs_fix = False
-            if not category:
-                needs_fix = True
-            elif "cookie" in category.lower():
-                needs_fix = True
-            elif category not in VALID_CATEGORIES:
-                needs_fix = True
-            
-            if needs_fix:
-                places_to_fix.append({
-                    "article_url": article_url,
-                    "stop_index": i,
-                    "place_name": stop.get("name") or stop.get("place_name") or "Unknown",
-                    "current_category": category,
-                    "vibe_tags": solver_data.get("vibe_tags", []),
-                    "notes": stop.get("notes", ""),
-                    "types": stop.get("types", []),
-                    "solver_data": solver_data,
-                    "full_stop": stop,
-                })
-                
-                if len(places_to_fix) >= limit:
-                    break
-        
-        if len(places_to_fix) >= limit:
-            break
-    
-    return places_to_fix
+        print(f"Processing article: {article_url}")
+        print(f"Raw enriched_itinerary_data: {json.dumps(data, indent=2)}")
+        
+        for i, stop in enumerate(data.get("stops", [])):
+            solver_data = stop.get("solver_data", {})
+            category = solver_data.get("category_normalized", "")
+            
+            # Check if this needs fixing
+            needs_fix = False
+            if not category:
+                needs_fix = True
+            elif "cookie" in category.lower():
+                needs_fix = True
+            elif category not in VALID_CATEGORIES:
+                needs_fix = True
+            
+            if needs_fix:
+                places_to_fix.append({
+                    "article_url": article_url,
+                    "stop_index": i,
+                    "place_name": stop.get("name") or stop.get("place_name") or "Unknown",
+                    "current_category": category,
+                    "vibe_tags": solver_data.get("vibe_tags", []),
+                    "notes": stop.get("notes", ""),
+                    "types": stop.get("types", []),
+                    "solver_data": solver_data,
+                    "full_stop": stop,
+                })
+                
+                if len(places_to_fix) >= limit:
+                    break
+        
+        if len(places_to_fix) >= limit:
+            break
+    
+    return places_to_fix
+
 
+def update_place_category(
+    supabase: Client,
+    article_url: str,
+    stop_index: int,
+    new_category: str,
+    dry_run: bool = False
+) -> bool:
+    """
+    Update the category_normalized field for a specific stop.
+    """
+    if dry_run:
+        return True
+    
+    try:
+        # Fetch current data
+        response = (
+            supabase.table("lemon8_articles")
+            .select("enriched_itinerary_data")
+            .eq("url", article_url)
+            .single()
+            .execute()
+        )
+        
+        data = response.data.get("enriched_itinerary_data")
+        if isinstance(data, list) and data:
+            data = data[0]
+        
+        if not data or "stops" not in data:
+            return False
+        
+        # Update the specific stop
+        if stop_index < len(data["stops"]):
+            stop = data["stops"][stop_index]
+            if "solver_data" not in stop:
+                stop["solver_data"] = {}
+            stop["solver_data"]["category_normalized"] = new_category
+
+            # Also update the new top-level array columns
+            # Aggregate all categories and vibes from all stops in the itinerary
+            all_categories = []
+            all_vibes = []
+            for s in data["stops"]:
+                if "solver_data" in s and "category_normalized" in s["solver_data"]:
+                    all_categories.append(s["solver_data"]["category_normalized"])
+                if "solver_data" in s and "vibe_tags" in s["solver_data"]:
+                    all_vibes.extend(s["solver_data"]["vibe_tags"])
 
-def update_place_category(
-    supabase: Client,
-    article_url: str,
-    stop_index: int,
-    new_category: str,
-    dry_run: bool = False
-) -> bool:
-    """
-    Update the category_normalized field for a specific stop.
-    """
-    if dry_run:
-        return True
-    
-    try:
-        # Fetch current data
-        response = (
-            supabase.table("lemon8_articles")
-            .select("enriched_itinerary_data")
-            .eq("url", article_url)
-            .single()
-            .execute()
-        )
-        
-        data = response.data.get("enriched_itinerary_data")
-        if isinstance(data, list) and data:
-            data = data[0]
-        
-        if not data or "stops" not in data:
-            return False
-        
-        # Update the specific stop
-        if stop_index < len(data["stops"]):
-            stop = data["stops"][stop_index]
-            if "solver_data" not in stop:
-                stop["solver_data"] = {}
-            stop["solver_data"]["category_normalized"] = new_category
+            # Remove duplicates and ensure unique values
+            unique_categories = list(set(c for c in all_categories if c))
+            unique_vibes = list(set(v for v in all_vibes if v))
             
             # Save back
             supabase.table("lemon8_articles").update({
-                "enriched_itinerary_data": [data]
-            }).eq("url", article_url).execute()
-            
-            return True
-            
-    except Exception as e:
-        print(f"[ERROR] Failed to update {article_url}: {e}")
-        return False
-    
-    return False
+                "enriched_itinerary_data": [data],
+                "contained_categories": unique_categories,
+                "contained_vibes": unique_vibes,
+            }).eq("url", article_url).execute()
+            
+            return True
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to update {article_url}: {e}")
+        return False
+    
+    return False
+
 
-
-def main():
-    parser = argparse.ArgumentParser(description="Normalize place categories using LLM")
-    parser.add_argument("--dry-run", action="store_true", help="Don't actually update the database")
-    parser.add_argument("--limit", type=int, default=50, help="Max places to process")
-    parser.add_argument("--skip-llm", action="store_true", help="Only use quick fixes, no LLM")
-    args = parser.parse_args()
-    
-    print("=" * 60)
-    print("CATEGORY NORMALIZER")
-    print("=" * 60)
-    print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'}")
-    print(f"Limit: {args.limit}")
-    print(f"LLM: {'DISABLED' if args.skip_llm else 'ENABLED'}")
-    print("=" * 60)
-    
-    supabase = get_supabase_client()
-    
-    # Fetch places needing normalization
-    places = fetch_places_needing_normalization(supabase, limit=args.limit)
-    print(f"\nFound {len(places)} places needing normalization\n")
-    
-    if not places:
-        print("Nothing to fix!")
-        return
-    
-    results: List[NormalizationResult] = []
-    
-    for i, place in enumerate(places, 1):
-        place_name = place["place_name"]
-        old_category = place["current_category"]
-        
-        print(f"[{i}/{len(places)}] {place_name}")
-        print(f"   Old: '{old_category}'")
-        
-        # Try quick fix first
-        new_category = quick_fix_category(old_category, place_name)
-        method = "quick_fix"
-        confidence = 1.0
-        
-        if new_category is None and not args.skip_llm:
+def main():
+    parser = argparse.ArgumentParser(description="Normalize place categories using LLM")
+    parser.add_argument("--dry-run", action="store_true", help="Don't actually update the database")
+    parser.add_argument("--limit", type=int, default=50, help="Max places to process")
+    parser.add_argument("--skip-llm", action="store_true", help="Only use quick fixes, no LLM")
+    parser.add_argument("--url", type=str, help="Process only a specific article URL")
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("CATEGORY NORMALIZER")
+    print("=" * 60)
+    print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'}")
+    print(f"Limit: {args.limit}")
+    print(f"LLM: {'DISABLED' if args.skip_llm else 'ENABLED'}")
+    print(f"URL Filter: {args.url if args.url else 'None'}")
+    print("=" * 60)
+    
+    supabase = get_supabase_client()
+    
+    # Fetch places needing normalization
+    places = fetch_places_needing_normalization(supabase, limit=args.limit, article_url_filter=args.url)
+    print(f"Found {len(places)} places needing normalization\n")
+    
+    if not places:
+        print("Nothing to fix!")
+        return
+    
+    results: List[NormalizationResult] = []
+    
+    for i, place in enumerate(places, 1):
+        place_name = place["place_name"]
+        old_category = place["current_category"]
+        
+        print(f"[{i}/{len(places)}] {place_name}")
+        print(f"   Old: '{old_category}'")
+        
+        # Try quick fix first
+        new_category = quick_fix_category(old_category, place_name)
+        method = "quick_fix"
+        confidence = 1.0
+        
+        if new_category is None and not args.skip_llm:
             # Need LLM
-            print(f"   Using LLM...")
-            llm_result = normalize_with_llm(
-                place_name=place_name,
-                current_category=old_category,
-                vibe_tags=place["vibe_tags"],
-                notes=place["notes"],
-                types=place["types"]
-            )
-            new_category = llm_result["category"]
+            print(f"   Using LLM...")
+            llm_result = normalize_with_llm(
+                place_name=place_name,
+                current_category=old_category,
+                vibe_tags=place["vibe_tags"],
+                notes=place["notes"],
+                types=place["types"]
+            )
+            new_category = llm_result["category"]
             confidence = llm_result["confidence"]
-            method = "llm"
-            time.sleep(0.5)  # Rate limit
-        elif new_category is None:
-            new_category = "Other"
-            confidence = 0.0
-            method = "fallback"
-        
-        print(f"   New: '{new_category}' ({method}, {confidence:.0%})")
-        
-        # Update database
-        if old_category != new_category:
-            success = update_place_category(
-                supabase,
-                place["article_url"],
-                place["stop_index"],
-                new_category,
-                dry_run=args.dry_run
-            )
-            status = "✓" if success else "✗"
-        else:
-            status = "="  # No change needed
-        
-        print(f"   Status: {status}")
-        
-        results.append(NormalizationResult(
-            place_name=place_name,
-            old_category=old_category,
-            new_category=new_category,
-            confidence=confidence,
-            method=method
-        ))
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    
-    quick_fixes = sum(1 for r in results if r.method == "quick_fix")
-    llm_fixes = sum(1 for r in results if r.method == "llm")
-    changes = sum(1 for r in results if r.old_category != r.new_category)
-    
-    print(f"Total processed: {len(results)}")
-    print(f"Quick fixes: {quick_fixes}")
-    print(f"LLM fixes: {llm_fixes}")
-    print(f"Categories changed: {changes}")
-    
-    # Show category distribution
-    print("\nNew category distribution:")
-    category_counts = {}
-    for r in results:
-        category_counts[r.new_category] = category_counts.get(r.new_category, 0) + 1
-    
-    for cat, count in sorted(category_counts.items(), key=lambda x: -x[1]):
-        print(f"  {cat}: {count}")
-
-
-if __name__ == "__main__":
-    main()
-
+            method = "llm"
+            time.sleep(0.5)  # Rate limit
+        elif new_category is None:
+            new_category = "Other"
+            confidence = 0.0
+            method = "fallback"
+        
+        print(f"   New: '{new_category}' ({method}, {confidence:.0%})")
+        
+        # Update database
+        if old_category != new_category:
+            success = update_place_category(
+                supabase,
+                place["article_url"],
+                place["stop_index"],
+                new_category,
+                dry_run=args.dry_run
+            )
+            status = "✓" if success else "✗"
+        else:
+            status = "="  # No change needed
+        
+        print(f"   Status: {status}")
+        
+        results.append(NormalizationResult(
+            place_name=place_name,
+            old_category=old_category,
+            new_category=new_category,
+            confidence=confidence,
+            method=method
+        ))
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    
+    quick_fixes = sum(1 for r in results if r.method == "quick_fix")
+    llm_fixes = sum(1 for r in results if r.method == "llm")
+    changes = sum(1 for r in results if r.old_category != r.new_category)
+    
+    print(f"Total processed: {len(results)}")
+    print(f"Quick fixes: {quick_fixes}")
+    print(f"LLM fixes: {llm_fixes}")
+    print(f"Categories changed: {changes}")
+    
+    # Show category distribution
+    print("\nNew category distribution:")
+    category_counts = {}
+    for r in results:
+        category_counts[r.new_category] = category_counts.get(r.new_category, 0) + 1
+    
+    for cat, count in sorted(category_counts.items(), key=lambda x: -x[1]):
+        print(f"  {cat}: {count}")
+
+
+if __name__ == "__main__":
+    main()

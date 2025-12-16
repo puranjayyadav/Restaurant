@@ -218,7 +218,7 @@ def setup_driver(brave_path=None):
     else:
         # Check for standard Chrome locations or let Selenium find it
         if is_ci:
-            options.binary_location = "/usr/bin/google-chrome" 
+            options.binary_location = "/usr/bin/chromium-browser"
         print("Using system Chrome/Chromium", flush=True)
 
     # Anti-detection

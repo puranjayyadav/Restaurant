@@ -204,6 +204,29 @@ class NBASolver:
         # Total score
         total_score = rating_score + distance_score + time_match_score + open_now_score
         
+        # --- CURATED BONUS ---
+        # We trust our own hand-picked data more than scraped data
+        if place.get('is_curated'):
+            # Massive boost: curated places are quality-vetted
+            total_score += 15.0
+            
+            # Source bonus: Yelp-enriched curated data is even better (has hours)
+            if place.get('source') == 'yelp':
+                total_score += 5.0  # Extra for having reliable hours data
+            
+            # Vibe match bonus (if user has vibe preferences)
+            if user_preferences and user_preferences.get('vibe'):
+                vibe_tags = place.get('vibe_tags') or []
+                if user_preferences['vibe'] in vibe_tags:
+                    total_score += 10.0
+            
+            # Time bias match (if place has optimal time and it matches)
+            time_bias = place.get('time_bias')
+            if time_bias:
+                time_context = get_time_context_label(current_time.hour)
+                if time_bias.lower() in time_context.lower() or time_context.lower() in time_bias.lower():
+                    total_score += 5.0
+        
         # User preference bonus (optional, up to +10 points)
         if user_preferences:
             # Check cuisine match

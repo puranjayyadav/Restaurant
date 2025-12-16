@@ -23,7 +23,7 @@ from .utils import (
     match_restaurant_with_postgres, enrich_restaurant_data,
     filter_directional_places, get_time_context_query, get_time_context_label
 )
-from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
+from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache, get_combined_places
 from .scraping_service import get_cached_or_scraped_places
 from .nba_solver import NBASolver, DynamicItinerarySolver
 import uuid
@@ -3395,8 +3395,10 @@ def next_best_action(request):
                 return _is_number(loc.get('lat')) and _is_number(loc.get('lng') or loc.get('long'))
             return False
 
-        # Use scraping service that auto-scrapes on cache miss
-        all_places, cache_hit = get_cached_or_scraped_places(
+        # HYBRID DATA STRATEGY: Merge Curated (Quality) + Scraped (Quantity)
+        
+        # 1. Get scraped places (auto-scrapes on cache miss)
+        scraped_places, cache_hit = get_cached_or_scraped_places(
             lat=latitude,
             lon=longitude,
             query=None,  # Uses time-context based query
@@ -3404,14 +3406,24 @@ def next_best_action(request):
             radius_km=1.0
         )
         
-        valid_places = [p for p in all_places if _has_coords(p)]
+        # Filter scraped to valid coords only
+        valid_scraped = [p for p in scraped_places if _has_coords(p)]
         
-        if valid_places:
-            places = valid_places
-            print(f"DEBUG: NBA got {len(places)} valid places (cache_hit={cache_hit}, raw={len(all_places)})")
+        # 2. Merge with curated data (Lemon8 + Yelp)
+        combined_places, merge_stats = get_combined_places(
+            lat=latitude,
+            lon=longitude,
+            scraped_places=valid_scraped,
+            radius_km=2.0  # Wider radius for curated data
+        )
+        
+        if combined_places:
+            places = combined_places
+            curated_count = merge_stats.get('curated_lemon8', 0) + merge_stats.get('curated_yelp', 0)
+            print(f"DEBUG: NBA combined {len(places)} places (curated={curated_count}, scraped={merge_stats.get('scraped', 0)}, cache_hit={cache_hit})")
         else:
-            # Still no valid places after scrape attempt
-            print(f"DEBUG: NBA no valid places after scrape for {geohash}/{query_context}")
+            # No places from any source
+            print(f"DEBUG: NBA no places found for {latitude},{longitude}")
             return Response({
                 "next_stop": None,
                 "backup_stop": None,
@@ -3419,7 +3431,8 @@ def next_best_action(request):
                 "confidence": 0.0,
                 "cache_hit": cache_hit,
                 "response_time_ms": int((time.time() - start_time) * 1000),
-                "message": "No places found for this location."
+                "message": "No places found for this location.",
+                "merge_stats": merge_stats
             }, status=status.HTTP_200_OK)
         
         # Apply directional filter if heading provided
@@ -3461,6 +3474,7 @@ def next_best_action(request):
         result['cache_hit'] = cache_hit
         result['response_time_ms'] = response_time_ms
         result['rolling_chain'] = rolling_chain
+        result['data_sources'] = merge_stats  # Show curated vs scraped breakdown
         
         return Response(result, status=status.HTTP_200_OK)
         

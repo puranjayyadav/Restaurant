@@ -356,9 +356,9 @@ def main():
         print(f"📋 Total generated seed URLs: {len(seed_urls_to_check)}", flush=True)
         
     else:
-        print("🌍 No city or manual URLs specified. Using LLM for broad region discovery (e.g., 'USA').", flush=True)
-        seed_urls_to_check = generate_seed_urls_recursive("USA")
-        print(f"📋 Total generated seed URLs: {len(seed_urls_to_check)}", flush=True)
+        print("❌ Error: No city or manual URLs specified.", flush=True)
+        print("💡 Usage: python scout_lemon8.py --city 'Austin' or --city 'California'", flush=True)
+        sys.exit(1)
 
     if not seed_urls_to_check:
         print("✗ No seed URLs generated. Exiting.", flush=True)

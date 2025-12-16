@@ -84,7 +84,7 @@ jobs:
           # Process first 20 URLs per run to avoid timeout (GitHub Actions has time limits)
           # The script will generate ~400+ URLs, but we'll process them in batches
           # Use -u flag for unbuffered output and tee to capture logs
-          python -u scout_lemon8.py 20 2>&1 | tee scout_output.log
+          python -u scout_lemon8.py --batch-size 20 2>&1 | tee scout_output.log
       
       - name: Upload logs
         if: always()

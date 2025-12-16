@@ -3,7 +3,7 @@ name: Enrich Solver Tags
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *" # every 30 minutes
+    - cron: "0 * * * *" # every hour
 
 jobs:
   enrich:
@@ -44,5 +44,6 @@ jobs:
             --pk-field url \
             --title-field none \
             --subtitle-field none \
-            --limit 500
+            --limit 1000 \
+            --city "New York"
 

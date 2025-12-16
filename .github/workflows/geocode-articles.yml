@@ -28,4 +28,4 @@ jobs:
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         NOMINATIM_EMAIL: ${{ secrets.NOMINATIM_EMAIL }}
         PYTHONIOENCODING: utf-8
-      run: python geocode_single_article.py --batch --limit 100
+      run: python geocode_single_article.py --batch --limit 1000

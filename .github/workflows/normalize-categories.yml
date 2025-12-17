@@ -32,8 +32,9 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           # Process 100 places per run to gradually normalize the dataset
+          # Prioritizes NYC articles first, then processes others
           # Uses LLM to fix categories like "Cookies Details" (scraping bug) into proper categories
-          python -u normalize_categories.py --limit 100 2>&1 | tee normalize_output.log
+          python -u normalize_categories.py --limit 100 --nyc-priority 2>&1 | tee normalize_output.log
 
       - name: Upload logs
         if: always()

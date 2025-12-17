@@ -456,27 +456,68 @@ Return ONLY a JSON object: {{"category": "...", "confidence": 0.0-1.0}}
 
 
 
-def fetch_places_needing_normalization(supabase: Client, limit: int = 100, article_url_filter: Optional[str] = None) -> List[Dict]:
+def fetch_places_needing_normalization(supabase: Client, limit: int = 100, article_url_filter: Optional[str] = None, nyc_priority: bool = False) -> List[Dict]:
 
     """
 
     Fetch places from lemon8_articles that have bad categories.
+    If nyc_priority=True, prioritize NYC articles first, then fill with others.
 
     """
 
     print(f"Fetching places with 'Cookies Details' or missing categories...")
+    if nyc_priority:
+        print("NYC PRIORITY MODE: Processing NYC articles first")
 
-    
+    # NYC keywords for identification
+    nyc_keywords = [
+        "nyc", "new york", "manhattan", "brooklyn", "queens", "bronx",
+        "staten island", "harlem", "soho", "tribeca", "chelsea", "west village",
+        "east village", "greenwich village", "upper east side", "upper west side",
+        "lower east side", "financial district", "williamsburg", "dumbo",
+        "flatiron", "times square", "central park"
+    ]
 
-    query = supabase.table("lemon8_articles") \
-        .select("url, enriched_itinerary_data") \
-        .not_.is_("enriched_itinerary_data", "null")
+    places_to_fix = []
 
-    
+    if nyc_priority:
+        # First, get all articles and separate NYC from non-NYC
+        print("Fetching all articles to separate NYC from others...")
+        all_response = supabase.table("lemon8_articles") \
+            .select("url, enriched_itinerary_data") \
+            .not_.is_("enriched_itinerary_data", "null")
 
-    if article_url_filter:
+        if article_url_filter:
+            all_response = all_response.eq("url", article_url_filter)
 
-        query = query.eq("url", article_url_filter)
+        all_response = all_response.execute()
+
+        nyc_articles = []
+        non_nyc_articles = []
+
+        for row in all_response.data or []:
+            url = row.get("url", "").lower()
+            # Check if URL contains NYC keywords
+            if any(keyword in url for keyword in nyc_keywords):
+                nyc_articles.append(row)
+            else:
+                non_nyc_articles.append(row)
+
+        print(f"Found {len(nyc_articles)} NYC articles and {len(non_nyc_articles)} non-NYC articles")
+
+        # Process NYC articles first
+        articles_to_process = nyc_articles + non_nyc_articles
+    else:
+        # Original logic for non-priority mode
+        query = supabase.table("lemon8_articles") \
+            .select("url, enriched_itinerary_data") \
+            .not_.is_("enriched_itinerary_data", "null")
+
+        if article_url_filter:
+            query = query.eq("url", article_url_filter)
+
+        response = query.execute()
+        articles_to_process = response.data or []
 
 
 
@@ -504,8 +545,10 @@ def fetch_places_needing_normalization(supabase: Client, limit: int = 100, artic
 
         article_url = row.get("url")
 
+        is_nyc = any(keyword in article_url.lower() for keyword in nyc_keywords)
+        priority_indicator = "[NYC] " if nyc_priority and is_nyc else ""
 
-        print(f"Processing article: {article_url}")
+        print(f"Processing {priority_indicator}article: {article_url}")
 
         print(f"Raw enriched_itinerary_data: {json.dumps(data, indent=2)}")
 
@@ -706,6 +749,8 @@ def main():
 
     parser.add_argument("--url", type=str, help="Process only a specific article URL")
 
+    parser.add_argument("--nyc-priority", action="store_true", help="Prioritize NYC articles first, then others")
+
     args = parser.parse_args()
 
     
@@ -734,7 +779,7 @@ def main():
 
     # Fetch places needing normalization
 
-    places = fetch_places_needing_normalization(supabase, limit=args.limit, article_url_filter=args.url)
+    places = fetch_places_needing_normalization(supabase, limit=args.limit, article_url_filter=args.url, nyc_priority=args.nyc_priority)
 
     print(f"Found {len(places)} places needing normalization\n")
 

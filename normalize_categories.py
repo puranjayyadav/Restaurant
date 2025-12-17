@@ -518,18 +518,13 @@ def fetch_places_needing_normalization(supabase: Client, limit: int = 100, artic
 
         response = query.execute()
         articles_to_process = response.data or []
-
-
-
-    response = query.execute()
-
     
 
     places_to_fix = []
 
     
 
-    for row in response.data or []:
+    for row in articles_to_process:
 
         data = row.get("enriched_itinerary_data")
 

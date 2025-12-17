@@ -11,6 +11,7 @@ from datetime import datetime
 
 # Configure Django settings
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "my_new_project.settings")
+print(f"DJANGO_SETTINGS_MODULE set to: {os.environ.get('DJANGO_SETTINGS_MODULE')}")
 
 # Ensure project root and workspace root on path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,13 +19,17 @@ WORKSPACE_ROOT = os.path.dirname(BASE_DIR)
 PROJECT_PACKAGE_DIR = os.path.join(BASE_DIR, "my_new_project")
 
 # Add workspace root and inner package directory
+print(f"BASE_DIR: {BASE_DIR}")
+print(f"WORKSPACE_ROOT: {WORKSPACE_ROOT}")
+print(f"PROJECT_PACKAGE_DIR: {PROJECT_PACKAGE_DIR}")
 for path in (WORKSPACE_ROOT, PROJECT_PACKAGE_DIR, BASE_DIR):
     if path not in sys.path:
         sys.path.insert(0, path)
+        print(f"Added to sys.path: {path}")
 
-import django
-
-django.setup()
+print(f"sys.path: {sys.path}")
+print("Attempting to import Django...")
+# Django is already set up by manage.py shell
 
 from supabase_config import get_supabase_client
 from res_backend.scraping_service import get_cached_or_scraped_places

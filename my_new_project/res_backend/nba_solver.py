@@ -274,8 +274,8 @@ class NBASolver:
         
         # Try to parse hours (format varies)
         # Common formats:
-        # - List of dicts: [{"day": 0, "hours": "9:00 AM - 10:00 PM"}, ...]
-        # - Dict: {"monday": "9:00 AM - 10:00 PM", ...}
+        # - List of dicts: [{"day": 0, "hours": "7:00 AM - 9:00 PM"}, ...]
+        # - Dict: {"monday": "7:00 AM - 9:00 PM", ...}
         
         current_weekday = current_time.weekday()  # 0 = Monday
         
@@ -285,7 +285,7 @@ class NBASolver:
                 if day == current_weekday:
                     hours_str = hour_entry.get('hours') or hour_entry.get('hours_str')
                     if hours_str:
-                        # Try to parse "9:00 AM - 10:00 PM"
+                        # Try to parse "7:00 AM - 9:00 PM"
                         if self._parse_hours_string(hours_str, current_time_minutes):
                             return True
         
@@ -294,7 +294,7 @@ class NBASolver:
     
     def _parse_hours_string(self, hours_str: str, current_time_minutes: int) -> bool:
         """
-        Parse hours string like "9:00 AM - 10:00 PM" and check if current time is within range.
+        Parse hours string like "7:00 AM - 9:00 PM" and check if current time is within range.
         
         Args:
             hours_str: Hours string
@@ -412,6 +412,10 @@ class NBASolver:
             # Keep raw coordinates so rolling simulations can re-anchor
             "lat": place_lat,
             "lng": place_lon,
+            "vibe_tags": place.get('vibe_tags') or [],
+            "time_bias": place.get('time_bias'),
+            "price_tier": place.get('price_tier'),
+            "is_curated": place.get('is_curated', False),
         }
     
     def _bearing_to_cardinal(self, bearing: float) -> str:
@@ -446,7 +450,8 @@ class DynamicItinerarySolver(NBASolver):
         heading: Optional[float],
         current_time: datetime,
         places: List[Dict],
-        steps: int = 4
+        steps: int = 4,
+        user_preferences: Optional[Dict] = None
     ) -> List[Dict]:
         """
         Generate a multi-step chain (A -> B -> C) using simulated future states.
@@ -471,7 +476,7 @@ class DynamicItinerarySolver(NBASolver):
                 heading=sim_heading,
                 current_time=sim_time,
                 places=available_places,
-                user_preferences=None
+                user_preferences=user_preferences
             )
             best_stop = step_result.get('next_stop')
             if not best_stop:
@@ -517,4 +522,3 @@ class DynamicItinerarySolver(NBASolver):
                 if key in lower_t:
                     return key
         return 'general'
-

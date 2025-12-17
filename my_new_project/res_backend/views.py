@@ -23,7 +23,8 @@ from .utils import (
     match_restaurant_with_postgres, enrich_restaurant_data,
     filter_directional_places, get_time_context_query, get_time_context_label
 )
-from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache, get_cached_or_scraped_places
+from .scraping_service import get_cached_or_scraped_places
+from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
 from .nba_solver import NBASolver
 import uuid
 import json
@@ -2738,16 +2739,6 @@ def get_user_stats(request, user_id):
 # Scraped Restaurant API Endpoints
 # ============================================================================
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance between two points in km using Haversine formula"""
-    R = 6371  # Earth radius in km
-    dlat = radians(float(lat2) - float(lat1))
-    dlon = radians(float(lon2) - float(lon1))
-    a = sin(dlat/2)**2 + cos(radians(float(lat1))) * cos(radians(float(lat2))) * sin(dlon/2)**2
-    return 2 * R * asin(sqrt(a))
-
-
-@api_view(['GET'])
 @permission_classes([])
 def get_scraped_restaurants(request):
     """

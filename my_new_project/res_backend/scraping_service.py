@@ -3,11 +3,15 @@ Service for cached scraping of places.
 Integrates geohash caching with Google Maps scraping.
 """
 
-from typing import List, Dict, Optional, Tuple
+import math
+import os
+from typing import List, Dict, Optional, Tuple, Set
 from datetime import datetime
 from django.utils import timezone
 import sys
-import os
+
+# Import Supabase client
+from supabase import create_client
 
 # Add parent directory to path for google_maps_scraper import
 parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,8 +22,110 @@ from google_maps_scraper import get_google_maps_data
 from .geohash_cache import (
     get_geohash, get_cached_places, save_places_to_cache
 )
-from .utils import get_time_context_query, get_time_context_label
+from .utils import get_time_context_query, get_time_context_label, haversine_distance, _infer_types_from_name
 
+def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.0) -> List[Dict]:
+    """
+    Fetch curated places from lemon8_articles table (from enriched_itinerary_data).
+
+    These are hand-picked high-quality places from Lemon8 itineraries.
+
+    Args:
+        lat: User latitude
+        lon: User longitude
+        radius_km: Search radius in kilometers
+    Returns:
+        List of curated place dictionaries
+    """
+    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    curated_places: List[Dict] = []
+    seen_names: Set[str] = set()  # To prevent duplicate curated places from different articles
+    
+    try:
+        # Fetch all articles with enriched data. We filter by proximity in Python for flexibility.
+        response = (
+            supabase.table("lemon8_articles")
+            .select("url, enriched_itinerary_data")
+            .not_.is_("enriched_itinerary_data", "null")
+            .execute()
+        )
+        
+        for row in response.data or []:
+            article_url = row.get("url")
+            itinerary_data = row.get("enriched_itinerary_data")
+            
+            # Handle potential list wrapper around itinerary_data
+            if isinstance(itinerary_data, list) and itinerary_data:
+                itinerary_data = itinerary_data[0]
+            
+            if not itinerary_data or "stops" not in itinerary_data:
+                continue
+                
+            stops = itinerary_data["stops"]
+            
+            for i, stop in enumerate(stops):
+                stop_lat = stop.get("lat") or stop.get("latitude")
+                stop_lng = stop.get("lng") or stop.get("longitude")
+                
+                if stop_lat is None or stop_lng is None:
+                    continue
+                    
+                # Calculate distance
+                dist_m = haversine_distance(lat, lon, float(stop_lat), float(stop_lng))
+                dist_km = dist_m / 1000.0
+                
+                if dist_km > radius_km:
+                    continue  # Too far
+                
+                # Get stop metadata if available
+                stop_info = stop
+                stop_name = stop_info.get("name") or stop_info.get("place_name") or f"Stop {i+1}"
+                
+                # Extract solver_data (contains vibe_tags, time_bias, price_tier, etc.)
+                solver_data = stop_info.get("solver_data") or {}
+                
+                # Deduplicate based on name (within curated list itself)
+                name_key = stop_name.lower().strip()
+                if name_key in seen_names:
+                    continue
+                seen_names.add(name_key)
+                
+                # Extract vibe_tags from solver_data (primary) or stop_info (fallback)
+                vibe_tags = (
+                    solver_data.get("vibe_tags") or 
+                    stop_info.get("vibe_tags") or 
+                    stop_info.get("tags") or 
+                    []
+                )
+                
+                # Build curated place dict with FULL solver_data extraction
+                curated_place = {
+                    "name": stop_name,
+                    "lat": float(stop_lat),
+                    "lng": float(stop_lng),
+                    "place_id": f"lemon8_{hash(stop_name + str(stop_lat))}",  # Synthetic ID
+                    "is_curated": True,  # FLAG for scoring bonus
+                    "source": "lemon8",
+                    "source_url": article_url,
+                    "rating": stop_info.get("rating") or 4.5,  # Default good rating for curated
+                    "types": _infer_types_from_name(stop_name),
+                    "custom_notes": stop_info.get("description") or stop_info.get("notes") or "",
+                    # Vibe/preference data from solver_data
+                    "vibe_tags": vibe_tags,
+                    "time_bias": solver_data.get("time_bias") or stop_info.get("time_bias") or None,
+                    "price_tier": solver_data.get("price_tier"),
+                    "category_normalized": solver_data.get("category_normalized"),
+                    "solver_data": solver_data if solver_data else None,
+                }
+                
+                curated_places.append(curated_place)
+        
+        # print(f"DEBUG: Found {len(curated_places)} curated places within {radius_km}km")
+        return curated_places
+        
+    except Exception as e:
+        print(f"ERROR: Failed to fetch curated places: {e}")
+        return []
 
 def get_cached_or_scraped_places(
     lat: float,
@@ -96,4 +202,3 @@ def get_cached_or_scraped_places(
         print(f"DEBUG: Saved {len(places)} places to cache: {geohash}/{query_context}")
     
     return places, False
-

@@ -4,11 +4,82 @@ Implements grid-based caching using geohash cells to avoid re-scraping the same 
 """
 
 import math
-from typing import List, Dict, Optional, Tuple
+import os
+from typing import List, Dict, Optional, Tuple, Set
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db.models import Q
 from .models import ScrapedPlaceCache
+from thefuzz import fuzz # For fuzzy name matching
+from supabase import create_client # Moved here to avoid circular dependencies in some contexts
+
+# --- Utils ---
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371000  # Radius of Earth in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return R * c
+
+def _data_richness_score(place: Dict) -> int:
+    """
+    Calculate a score for how "rich" a place's data is.
+    Used during deduplication to keep the entry with more useful info.
+    """
+    score = 0
+    if place.get('rating'): score += 2
+    if place.get('user_ratings_total'): score += 1
+    if place.get('hours') or place.get('opening_hours'): score += 5
+    if place.get('types') or place.get('categories'): score += 3
+    if place.get('formatted_address') or place.get('address'): score += 2
+    if place.get('website'): score += 1
+    if place.get('photos'): score += 1
+    if place.get('price_level') or place.get('price_tier'): score += 1
+    if place.get('vibe_tags'): score += 2
+    return score
+
+def deduplicate_places(places: List[Dict]) -> List[Dict]:
+    """
+Deduplicate a list of places based on spatial proximity (50m) and
+fuzzy name matching (60% similarity).
+Keeps the entry with richer data in case of duplicates.
+"""
+    unique_places: List[Dict] = []
+    
+    for p in places:
+        is_duplicate = False
+        for existing in unique_places:
+            # 1. Check Distance (Physics doesn't lie)
+            dist = haversine_distance(
+                p.get('lat', 0.0), p.get('lng', 0.0),
+                existing.get('lat', 0.0), existing.get('lng', 0.0)
+            )
+            
+            if dist < 50:  # If within 50 meters
+                # 2. Check Name Similarity (Fuzzy Match)
+                name_p = (p.get('name') or '').lower()
+                name_existing = (existing.get('name') or '').lower()
+                
+                # Use token_sort_ratio for better matching of reordered words
+                similarity = fuzz.token_sort_ratio(name_p, name_existing)
+                
+                if similarity > 60:  # If 60% similar name
+                    # MERGE THEM: Keep the one with more data
+                    if _data_richness_score(p) > _data_richness_score(existing):
+                        existing.update(p)  # Update existing with richer data
+                    is_duplicate = True
+                    break
+        
+        if not is_duplicate:
+            unique_places.append(p)
+            
+    return unique_places
 
 
 # Base32 encoding for geohash
@@ -180,4 +251,240 @@ def get_neighbor_geohashes(geohash: str) -> List[str]:
     # For now, return just the center geohash
     # Future: implement neighbor calculation for dynamic precision
     return [geohash]
+
+def _infer_types_from_name(name: str) -> List[str]:
+    """
+    Helper to infer place types from a place's name using keywords.
+    Used for categorizing Lemon8 curated places.
+    """
+    inferred_types = []
+    name_lower = name.lower()
+    
+    # Food-related
+    if "restaurant" in name_lower or "eatery" in name_lower or "kitchen" in name_lower:
+        inferred_types.append("restaurant")
+    if "cafe" in name_lower or "coffee" in name_lower:
+        inferred_types.append("cafe")
+    if "bar" in name_lower or "pub" in name_lower:
+        inferred_types.append("bar")
+    if "pizza" in name_lower:
+        inferred_types.append("pizza_restaurant")
+    if "bakery" in name_lower:
+        inferred_types.append("bakery")
+    if "sushi" in name_lower or "japanese" in name_lower:
+        inferred_types.append("japanese_restaurant")
+    if "taco" in name_lower or "mexican" in name_lower:
+        inferred_types.append("mexican_restaurant")
+    if "thai" in name_lower:
+        inferred_types.append("thai_restaurant")
+    if "ice cream" in name_lower or "gelato" in name_lower:
+        inferred_types.append("ice_cream_shop")
+        
+    # Activity/Place-related
+    if "park" in name_lower:
+        inferred_types.append("park")
+    if "museum" in name_lower:
+        inferred_types.append("museum")
+    if "gallery" in name_lower or "art" in name_lower:
+        inferred_types.append("art_gallery")
+    if "shop" in name_lower or "store" in name_lower or "boutique" in name_lower:
+        inferred_types.append("store")
+    if "market" in name_lower:
+        inferred_types.append("market")
+        
+    if not inferred_types:
+        inferred_types.append("point_of_interest")
+        
+    return inferred_types
+
+def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.0) -> List[Dict]:
+    """
+    Fetch curated places from lemon8_articles table (from enriched_itinerary_data).
+
+    These are hand-picked high-quality places from Lemon8 itineraries.
+
+    Args:
+        lat: User latitude
+        lon: User longitude
+        radius_km: Search radius in kilometers
+    Returns:
+        List of curated place dictionaries
+    """
+    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    curated_places: List[Dict] = []
+    seen_names: Set[str] = set()  # To prevent duplicate curated places from different articles
+    
+    try:
+        # Fetch all articles with enriched data. We filter by proximity in Python for flexibility.
+        response = (
+            supabase.table("lemon8_articles")
+            .select("url, enriched_itinerary_data")
+            .not_.is_("enriched_itinerary_data", "null")
+            .execute()
+        )
+        
+        for row in response.data or []:
+            article_url = row.get("url")
+            itinerary_data = row.get("enriched_itinerary_data")
+            
+            # Handle potential list wrapper around itinerary_data
+            if isinstance(itinerary_data, list) and itinerary_data:
+                itinerary_data = itinerary_data[0]
+            
+            if not itinerary_data or "stops" not in itinerary_data:
+                continue
+                
+            stops = itinerary_data["stops"]
+            
+            for i, stop in enumerate(stops):
+                stop_lat = stop.get("lat") or stop.get("latitude")
+                stop_lng = stop.get("lng") or stop.get("longitude")
+                
+                if stop_lat is None or stop_lng is None:
+                    continue
+                    
+                # Calculate distance
+                dist_m = haversine_distance(lat, lon, float(stop_lat), float(stop_lng))
+                dist_km = dist_m / 1000.0
+                
+                if dist_km > radius_km:
+                    continue  # Too far
+                
+                # Get stop metadata if available
+                stop_info = stop
+                stop_name = stop_info.get("name") or stop_info.get("place_name") or f"Stop {i+1}"
+                
+                # Extract solver_data (contains vibe_tags, time_bias, price_tier, etc.)
+                solver_data = stop_info.get("solver_data") or {}
+                
+                # Deduplicate based on name (within curated list itself)
+                name_key = stop_name.lower().strip()
+                if name_key in seen_names:
+                    continue
+                seen_names.add(name_key)
+                
+                # Extract vibe_tags from solver_data (primary) or stop_info (fallback)
+                vibe_tags = (
+                    solver_data.get("vibe_tags") or 
+                    stop_info.get("vibe_tags") or 
+                    stop_info.get("tags") or 
+                    []
+                )
+                
+                # Build curated place dict with FULL solver_data extraction
+                curated_place = {
+                    "name": stop_name,
+                    "lat": float(stop_lat),
+                    "lng": float(stop_lng),
+                    "place_id": f"lemon8_{hash(stop_name + str(stop_lat))}",  # Synthetic ID
+                    "is_curated": True,  # FLAG for scoring bonus
+                    "source": "lemon8",
+                    "source_url": article_url,
+                    "rating": stop_info.get("rating") or 4.5,  # Default good rating for curated
+                    "types": _infer_types_from_name(stop_name),
+                    "custom_notes": stop_info.get("description") or stop_info.get("notes") or "",
+                    # Vibe/preference data from solver_data
+                    "vibe_tags": vibe_tags,
+                    "time_bias": solver_data.get("time_bias") or stop_info.get("time_bias") or None,
+                    "price_tier": solver_data.get("price_tier"),
+                    "duration_minutes": solver_data.get("duration_minutes"),
+                    "category_normalized": solver_data.get("category_normalized"),
+                    "solver_data": solver_data if solver_data else None,
+                }
+                
+                curated_places.append(curated_place)
+        
+        # print(f"DEBUG: Found {len(curated_places)} curated places within {radius_km}km")
+        return curated_places
+        
+    except Exception as e:
+        print(f"ERROR: Failed to fetch curated places: {e}")
+        return []
+
+def get_curated_from_yelp_restaurants(lat: float, lon: float, radius_km: float = 2.0) -> List[Dict]:
+    """
+    Fetch curated places from yelp_restaurants table (enriched with hours, ratings).
+    
+    This is the "Enriched Quality" layer - has opening_hours which the solver needs.
+    
+    Args:
+        lat: User latitude
+        lon: User longitude
+        radius_km: Search radius in kilometers
+    
+    Returns:
+        List of curated place dictionaries
+    """
+    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    curated_places: List[Dict] = []
+    
+    try:
+        # Supabase RPC call for geospatial query
+        # This function should be defined in Supabase as an SQL function
+        # For example, named 'get_yelp_places_in_radius'
+        # The RPC function handles distance filtering and returns enriched data
+        response = supabase.rpc('get_yelp_places_in_radius', {
+            'user_lat': lat, 
+            'user_lon': lon, 
+            'search_radius_km': radius_km
+        }).execute()
+
+        for item in response.data or []:
+            curated_places.append({
+                "name": item.get('name'),
+                "place_id": item.get('yelp_id'),  # Use Yelp ID as place_id
+                "lat": item.get('latitude'),
+                "lng": item.get('longitude'),
+                "rating": item.get('rating'),
+                "user_ratings_total": item.get('review_count'),
+                "price_level": item.get('price'),
+                "hours": item.get('opening_hours'),
+                "types": item.get('categories'), # Yelp categories
+                "formatted_address": item.get('address'),
+                "website": item.get('url'),
+                "is_curated": True,  # FLAG for scoring bonus
+                "source": "yelp",
+                "vibe_tags": item.get('vibe_tags') or [], # Directly from Yelp data if enriched
+                "time_bias": item.get('time_bias'),
+                "price_tier": item.get('price_tier'),
+                "category_normalized": item.get('category_normalized'),
+            })
+    except Exception as e:
+        print(f"ERROR: Failed to fetch curated Yelp places: {e}")
+        # Fallback to direct table query if RPC fails or is not found
+        try:
+            res = (
+                supabase.table("yelp_restaurants")
+                .select("*", count="exact")
+                .order('yelp_id')
+                .limit(20) # Fallback limit
+                .execute()
+            )
+            for item in res.data or []:
+                dist_m = haversine_distance(lat, lon, item.get('latitude', 0.0), item.get('longitude', 0.0))
+                if dist_m / 1000.0 <= radius_km:
+                     curated_places.append({
+                        "name": item.get('name'),
+                        "place_id": item.get('yelp_id'),
+                        "lat": item.get('latitude'),
+                        "lng": item.get('longitude'),
+                        "rating": item.get('rating'),
+                        "user_ratings_total": item.get('review_count'),
+                        "price_level": item.get('price'),
+                        "hours": item.get('opening_hours'),
+                        "types": item.get('categories'),
+                        "formatted_address": item.get('address'),
+                        "website": item.get('url'),
+                        "is_curated": True,
+                        "source": "yelp",
+                        "vibe_tags": item.get('vibe_tags') or [],
+                        "time_bias": item.get('time_bias'),
+                        "price_tier": item.get('price_tier'),
+                        "category_normalized": item.get('category_normalized'),
+                    })
+        except Exception as fallback_e:
+            print(f"ERROR: Fallback Yelp fetch also failed: {fallback_e}")
+    
+    # print(f"DEBUG: Found {len(curated_places)} curated Yelp places within {radius_km}km")
+    return curated_places
 

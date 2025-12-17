@@ -1,0 +1,45 @@
+name: Normalize Categories
+
+on:
+  schedule:
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  normalize:
+    name: Normalize Place Categories
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Category Normalization
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          # Process 100 places per run to gradually normalize the dataset
+          # Uses LLM to fix categories like "Cookies Details" (scraping bug) into proper categories
+          python -u normalize_categories.py --limit 100 2>&1 | tee normalize_output.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalize-categories-logs
+          path: |
+            *.log
+            *.txt

@@ -23,7 +23,7 @@ from .utils import (
     match_restaurant_with_postgres, enrich_restaurant_data,
     filter_directional_places, get_time_context_query, get_time_context_label
 )
-from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
+from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache, get_cached_or_scraped_places
 from .nba_solver import NBASolver
 import uuid
 import json
@@ -3366,29 +3366,19 @@ def next_best_action(request):
         time_context = get_time_context_label(current_time.hour)
         query_context = time_context
         
-        # Check cache first
-        cached_places = get_cached_places(geohash, query_context) or []
-
-        def _has_coords(place: dict) -> bool:
-            def _is_number(val):
-                return val is not None
-
-            if 'lat' in place and ('lng' in place or 'long' in place):
-                return _is_number(place.get('lat')) and _is_number(place.get('lng') or place.get('long'))
-            if 'geometry' in place and 'location' in place['geometry']:
-                loc = place['geometry']['location'] or {}
-                return _is_number(loc.get('lat')) and _is_number(loc.get('lng') or loc.get('long'))
-            return False
-
-        valid_places = [p for p in cached_places if _has_coords(p)]
-        cache_hit = bool(valid_places)
+        user_preferences = data.get('user_preferences') or data.get('preferences')
         
-        if cache_hit:
-            places = valid_places
-            print(f"DEBUG: NBA cache HIT for {geohash}/{query_context} (valid={len(places)}, raw={len(cached_places)})")
-        else:
-            # Cache miss or empty/invalid cache - need to scrape (slow) so return hint
-            print(f"DEBUG: NBA cache MISS/EMPTY for {geohash}/{query_context} (raw_count={len(cached_places)})")
+        # Optional: radius to search for places (default 1km)
+        radius_km = float(data.get('radius_km', 1.0))
+        
+        # --- Hybrid Data Fetching (Curated + Scraped) ---
+        # Always fetch combined data, as curated is always fresh and provides base
+        # The `get_combined_places` function internally handles caching and scraping
+        print(f"DEBUG: Fetching combined places for {latitude},{longitude} (radius={radius_km}km)")
+        raw_scraped_places = get_cached_or_scraped_places(latitude, longitude, query_context, radius_km=radius_km)
+        places = get_cached_or_scraped_places(latitude, longitude, query_context, radius_km=radius_km)
+
+        if not places:
             return Response({
                 "next_stop": None,
                 "backup_stop": None,
@@ -3396,8 +3386,11 @@ def next_best_action(request):
                 "confidence": 0.0,
                 "cache_hit": False,
                 "response_time_ms": int((time.time() - start_time) * 1000),
-                "message": "No cached data available. Please use /api/get_personalized_recommendations/ to trigger scraping first."
+                "message": "No places found after fetching and merging data."
             }, status=status.HTTP_200_OK)
+        
+        # Determine if it was a cache hit for scraped data (curated is always fresh)
+        cache_hit = bool(raw_scraped_places)
         
         # Apply directional filter if heading provided
         if heading is not None:
@@ -3420,7 +3413,7 @@ def next_best_action(request):
             heading=float(heading) if heading is not None else None,
             current_time=current_time,
             places=places,
-            user_preferences=None  # TODO: Add user preferences support
+            user_preferences=user_preferences
         )
         
         response_time_ms = int((time.time() - start_time) * 1000)

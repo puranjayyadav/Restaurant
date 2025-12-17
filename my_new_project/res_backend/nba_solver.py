@@ -3,9 +3,15 @@ Next Best Action (NBA) Solver for real-time recommendations.
 Implements rolling horizon approach - returns only the next 2 steps instead of full itinerary.
 """
 
+import os
+import django
 from typing import List, Dict, Optional, Tuple, Set
 from datetime import datetime, timedelta
 import math
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_new_project.settings')
+django.setup()
+
 from .utils import (
     haversine_distance,
     calculate_bearing,

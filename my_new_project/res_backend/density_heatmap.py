@@ -330,8 +330,11 @@ def get_density_heatmap(request):
     """
     Get neighborhood density heatmap as GeoJSON.
     """
-    # Debug: Log incoming request
+    # Debug: Log incoming request and DB info
+    from django.conf import settings
+    db_engine = settings.DATABASES['default']['ENGINE']
     print(f"\n[DEBUG] GET /api/neighborhoods/density/ - Params: {request.GET.dict()}")
+    print(f"[DEBUG] Database Engine: {db_engine}")
     
     try:
         # Parse required parameters

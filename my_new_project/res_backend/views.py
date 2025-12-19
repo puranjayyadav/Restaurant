@@ -18,16 +18,22 @@ from math import radians, cos, sin, asin, sqrt
 import math
 from typing import List, Dict
 from django.shortcuts import get_object_or_404
+import requests
 from .recommendation import RestaurantRecommender
 from .utils import (
     match_restaurant_with_postgres, enrich_restaurant_data,
     filter_directional_places, get_time_context_query, get_time_context_label
 )
 from .scraping_service import get_cached_or_scraped_places
-from .geohash_cache import get_geohash, get_cached_places, save_places_to_cache
-from .nba_solver import NBASolver
+from .geohash_cache import (
+    get_geohash, get_cached_places, save_places_to_cache,
+    get_neighborhood_cluster_rpc, get_curated_places_from_lemon8
+)
+from .nba_solver import NBASolver, DynamicItinerarySolver
+from .itinerary_engine import ItineraryEngine
 import uuid
 import json
+from datetime import datetime
 
 # Initialize Firebase app (if not already initialized)
 # Supports both environment variable (Railway) and file path (local dev)
@@ -176,6 +182,89 @@ def get_trips(request):
         trips = [doc.to_dict() for doc in trips_query]
         return Response({"trips": trips}, status=status.HTTP_200_OK)
     except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([])
+def get_hotspot_itinerary(request):
+    """
+    Just-in-Time Itinerary Generation for a specific map hotspot.
+    Triggered when a user taps a cluster on the density heatmap.
+    """
+    try:
+        lat = float(request.GET.get('lat'))
+        lng = float(request.GET.get('lng'))
+        vibe = request.GET.get('vibe', 'Trendy')
+        radius_km = float(request.GET.get('radius_km', 1.5))
+    except (TypeError, ValueError):
+        return Response({"error": "Invalid lat/lng/radius"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        # 1. Fetch curated candidates from Supabase (Lemon8 Table)
+        from supabase import create_client
+        import os
+        from decouple import config
+        from .models import ScrapedRestaurant
+        
+        supabase = create_client(
+            config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), 
+            config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        )
+        
+        # Query curated articles
+        response = (
+            supabase.table("lemon8_articles")
+            .select("url, enriched_itinerary_data")
+            .not_.is_("enriched_itinerary_data", "null")
+            .execute()
+        )
+        candidates_data = response.data or []
+        print(f"[Hotspot] Lemon8 candidates: {len(candidates_data)}")
+        
+        # 2. Add high-quality local restaurants from PostgreSQL (EXPANDED POOL)
+        # Search radius: ~5km (0.05 degrees) for much more variety
+        local_spots = ScrapedRestaurant.objects.filter(
+            latitude__range=(lat-0.05, lat+0.05),
+            longitude__range=(lng-0.05, lng+0.05),
+            rating__gte=3.5  # Lowered from 4.0 to include more variety
+        )[:100]  # Increased from 20 to 100
+        
+        print(f"[Hotspot] PostgreSQL candidates: {local_spots.count()}")
+        
+        for spot in local_spots:
+            # Wrap in a format the ItineraryEngine expects
+            candidates_data.append({
+                'enriched_itinerary_data': {
+                    'stops': [{
+                        'place_name': spot.name,
+                        'latitude': float(spot.latitude),
+                        'longitude': float(spot.longitude),
+                        'notes': spot.description or f"Top rated spot in {spot.city}",
+                        'rating': float(spot.rating),
+                        'vibe_tags': spot.categories if isinstance(spot.categories, list) else [],
+                        'solver_data': {
+                            'price_tier': spot.price_range or '$$',
+                            'time_bias': 'Anytime',
+                            'category_normalized': spot.categories[0] if spot.categories else 'Restaurant'
+                        }
+                    }]
+                }
+            })
+
+        # 3. Drop all into the Engine
+        engine = ItineraryEngine(candidates_data)
+        
+        # 4. Generate the Plan
+        plan = engine.generate_plan(lat, lng, selected_vibe=vibe)
+        
+        if "error" in plan:
+            return Response(plan, status=status.HTTP_404_NOT_FOUND)
+            
+        return Response(plan, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        print(f"ERROR in get_hotspot_itinerary: {e}")
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class EstablishmentViewSet(viewsets.ModelViewSet):
@@ -2011,6 +2100,240 @@ def generate_and_enrich_itinerary(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+import uuid
+from .models import PublicItinerary # Assuming PublicItinerary model can be reused for skeleton
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from datetime import date # Added this import
+def _get_city_coordinates(city_name):
+    """
+    Fetch coordinates for a city or neighborhood using OpenStreetMap (via Photon API).
+    """
+    import urllib.parse
+    import traceback
+    try:
+        # URL-encode the city name properly
+        encoded_name = urllib.parse.quote(city_name)
+        url = f"https://photon.komoot.io/api/?q={encoded_name}&limit=1"
+        print(f"DEBUG: Geocoding URL: {url}")
+        headers = {'User-Agent': 'ResBackend/1.0 (contact@example.com)'}
+        response = requests.get(url, timeout=5, headers=headers)
+        print(f"DEBUG: Geocoding response status: {response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            print(f"DEBUG: Geocoding features count: {len(data.get('features', []))}")
+            if data.get('features'):
+                feature = data['features'][0]
+                coords = feature['geometry']['coordinates']
+                props = feature.get('properties', {})
+                result_name = props.get('name', 'Unknown')
+                result_city = props.get('city', props.get('county', ''))
+                print(f"DEBUG: Photon returned '{result_name}' in '{result_city}' at [{coords[1]:.4f}, {coords[0]:.4f}]")
+                # Photon returns [lon, lat], we need (lat, lon)
+                return float(coords[1]), float(coords[0])
+            else:
+                print(f"WARNING: Photon returned no features for '{city_name}'")
+    except Exception as e:
+        print(f"ERROR: Geocoding failed for '{city_name}': {e}")
+        traceback.print_exc()
+        
+    # Fallback to default (NYC center)
+    print(f"WARNING: Using NYC fallback coordinates for '{city_name}'")
+    return 40.7128, -74.0060
+
+def _get_city_candidates(city_name, vibes):
+    """Generate a pool of mock candidate places for a city to feed the solver"""
+    lat, lng = _get_city_coordinates(city_name)
+    candidates = []
+    
+    # Generate 15-20 candidates for the solver to pick from
+    types = ['cafe', 'restaurant', 'park', 'museum', 'bar', 'bakery']
+    categories = ['Trendy', 'Cozy', 'Vibrant', 'Upscale', 'Relaxed']
+    
+    for i in range(20):
+        ctype = types[i % len(types)]
+        vibe = categories[i % len(categories)]
+        
+        # Jitter coordinates within 2km
+        c_lat = lat + (i * 0.002) - 0.02
+        c_lng = lng + (i * 0.003) - 0.03
+        
+        candidates.append({
+            'place_id': f"mock-p-{city_name}-{i}",
+            'name': f"{city_name} {vibe} {ctype.capitalize()}",
+            'rating': 4.0 + (i % 10) * 0.1,
+            'types': [ctype, 'point_of_interest'],
+            'categories': [ctype, vibe],
+            'lat': c_lat,
+            'lng': c_lng,
+            'address': f"{i*123} Wander Lane, {city_name}",
+            'hours': [{"day": d, "hours": "8:00 AM - 10:00 PM"} for d in range(7)]
+        })
+    return candidates
+
+
+@api_view(['POST'])
+@permission_classes([]) # Adjust permissions as needed
+def create_itinerary_skeleton(request):
+    """
+    Creates a blank itinerary ID in Supabase and returns it.
+    """
+    try:
+        # Ensure request.data is available (DRF handles JSON parsing)
+        if not hasattr(request, 'data') or not request.data:
+            return Response(
+                {"error": "Invalid request body. Expected JSON data."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        data = request.data
+        destination = data.get('destination')
+        group_size = data.get('group_size')
+        vibes = data.get('vibes', [])
+
+        # Default start_date and end_date to today if not provided
+        start_date_str = data.get('start_date', date.today().isoformat())
+        end_date_str = data.get('end_date', date.today().isoformat())
+
+        if not all([destination, group_size, vibes]):
+            return Response(
+                {"error": "Missing required fields: destination, group_size, vibes."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. Get coordinates for the destination (Now uses real OSM geocoding)
+        lat, lng = _get_city_coordinates(destination)
+        print(f"DEBUG: Geocoded '{destination}' to {lat},{lng}")
+        
+        # 2. Fetch real data from Supabase (Hybrid Strategy: PostGIS RPC + Curated Lemon8)
+        from .geohash_cache import get_neighborhood_cluster_rpc, get_curated_places_from_lemon8, deduplicate_places
+        
+        # Always fetch curated places (the "gold standard" with rich notes)
+        curated_candidates = get_curated_places_from_lemon8(lat, lng, radius_km=2.5)
+        print(f"DEBUG: Found {len(curated_candidates)} curated Lemon8 places near ({lat:.4f}, {lng:.4f})")
+        
+        # Try the fast PostGIS RPC for a large volume of nearby spots
+        cluster_candidates, rpc_success = get_neighborhood_cluster_rpc(lat, lng, radius_meters=2500)
+        print(f"DEBUG: Found {len(cluster_candidates)} cluster places via RPC (success={rpc_success})")
+        
+        # Merge them (curated first to give them slight precedence in case of identical names)
+        candidates = deduplicate_places(curated_candidates + cluster_candidates)
+        print(f"DEBUG: After deduplication, total candidates = {len(candidates)}")
+        
+        if not candidates or len(candidates) < 5:
+            # Fallback to general restaurants if pool is too small
+            print(f"DEBUG: Combined pool has only {len(candidates)} places, falling back to scraped data")
+            search_query = vibes[0] if vibes else "trending restaurant"
+            scraped_places, _ = get_cached_or_scraped_places(lat, lng, query=search_query, radius_km=2.5)
+            
+            # If still nothing, try a very broad query
+            if not scraped_places:
+                scraped_places, _ = get_cached_or_scraped_places(lat, lng, query="restaurant", radius_km=3.0)
+            
+            candidates = deduplicate_places(candidates + scraped_places)
+
+        if not candidates:
+            return Response({
+                'error': f'Could not find enough places near {destination} ({lat},{lng}) to generate an itinerary.',
+                'status': 'error',
+                'geocoded_coords': [lat, lng]
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 3. Create a realistic itinerary using the enhanced NBASolver (Recursive Chain)
+        itinerary_id = str(uuid.uuid4())
+        solver = NBASolver()
+        
+        # Convert vibes to preferred cuisines for the solver's internal scoring
+        user_prefs = {'preferred_cuisines': vibes}
+        
+        itinerary_data = solver.generate_full_day_itinerary(
+            user_location=(lat, lng),
+            start_time=datetime.now().replace(hour=9, minute=0), # Start at 9 AM
+            places=candidates,
+            max_steps=5, # Generate a full day
+            max_distance_km=6.0, # Slightly more walking for day plans
+            user_preferences=user_prefs
+        )
+        
+        itinerary_stops = itinerary_data.get('itinerary', [])
+
+        if not itinerary_stops:
+            return Response({
+                'error': 'Could not generate a valid path through the selected places.',
+                'status': 'error'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 4. Format stops for ItineraryDetailScreen
+        formatted_stops = []
+        for stop in itinerary_stops:
+            # Extract categories for display safely
+            cat_display = stop.get('category_normalized', 'Spot').capitalize()
+            bearing = stop.get('bearing', 'N')
+            
+            # Use the intelligent reason generated by NBASolver (truncate for UI safety)
+            reason = stop.get('reason') or f"Highly rated stop in {destination}."
+            if len(reason) > 160:
+                reason = reason[:157] + "..."
+            
+            formatted_stops.append({
+                "place_name": stop.get('name', 'Unknown Spot'),
+                "category": f"{bearing} | {cat_display}",
+                "start_time": stop.get('estimated_arrival', '10:00 AM'),
+                "tip": reason,
+                "photos": stop.get('photos') or ["https://images.unsplash.com/photo-1494522855154-9297ac14b55f?q=80&w=800"]
+            })
+
+        clean_vibe = vibes[0] if vibes else "Exploration"
+        title = f"{destination}: {clean_vibe} Escape"
+        subtitle = f"A solver-optimized journey through {destination} using real Supabase data."
+
+        # Return the comprehensive itinerary data (compatible with ItineraryDetailScreen)
+        return Response({
+            'itinerary_id': itinerary_id,
+            'id': itinerary_id,
+            'status': 'success',
+            'message': 'Itinerary generated via NBASolver.',
+            'title': title,
+            'subtitle': subtitle,
+            'description': subtitle,
+            'tags': vibes,
+            'sample_image_url': 'https://images.unsplash.com/photo-1494522855154-9297ac14b55f?q=80&w=800',
+            'itinerary_data': {
+                'itinerary': formatted_stops,
+                'route_stats': {
+                    'total_distance_km': 4.2,
+                    'total_duration_hours': 10
+                }
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        import traceback
+        print(f"ERROR: Exception in create_itinerary_skeleton: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to create itinerary skeleton: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def get_address_suggestions_view(request):
+    """
+    Returns a list of address/city suggestions for a given query.
+    Used for autocomplete in the Trip Wizard.
+    """
+    from .suggest_service import get_address_suggestions
+    query = request.GET.get('q', '')
+    if not query:
+        return Response([], status=status.HTTP_200_OK)
+        
+    suggestions = get_address_suggestions(query)
+    return Response(suggestions, status=status.HTTP_200_OK)
+
+
 # ============================================================================
 # Public Itinerary Sharing Feature
 # ============================================================================
@@ -3361,27 +3684,33 @@ def next_best_action(request):
         
         # Optional: radius to search for places (default 1km)
         radius_km = float(data.get('radius_km', 1.0))
+        radius_meters = radius_km * 1000
         
-        # --- Hybrid Data Fetching (Curated + Scraped) ---
-        # Always fetch combined data, as curated is always fresh and provides base
-        # The `get_combined_places` function internally handles caching and scraping
-        print(f"DEBUG: Fetching combined places for {latitude},{longitude} (radius={radius_km}km)")
-        raw_scraped_places = get_cached_or_scraped_places(latitude, longitude, query_context, radius_km=radius_km)
-        places = get_cached_or_scraped_places(latitude, longitude, query_context, radius_km=radius_km)
+        # --- PHASE 3: PostGIS-based Neighborhood Clustering ---
+        # Try the fast PostGIS RPC first, fall back to Python filtering if unavailable
+        from .geohash_cache import get_neighborhood_cluster_rpc
+        
+        print(f"DEBUG: Fetching neighborhood cluster for {latitude},{longitude} (radius={radius_meters}m)")
+        places, rpc_success = get_neighborhood_cluster_rpc(latitude, longitude, radius_meters)
+        
+        if not places or not rpc_success:
+            # Fallback to existing hybrid fetch (curated + scraped)
+            print(f"DEBUG: RPC fallback - using get_cached_or_scraped_places")
+            places, cache_hit = get_cached_or_scraped_places(latitude, longitude, query_context, radius_km=radius_km)
+        else:
+            cache_hit = True  # RPC is essentially a cache hit (fast DB query)
 
         if not places:
             return Response({
-                "next_stop": None,
-                "backup_stop": None,
                 "context": time_context,
                 "confidence": 0.0,
-                "cache_hit": False,
+                "summary": "No places found in this area.",
+                "itinerary": [],
+                "backup_option": None,
+                "cache_hit": cache_hit,
                 "response_time_ms": int((time.time() - start_time) * 1000),
                 "message": "No places found after fetching and merging data."
             }, status=status.HTTP_200_OK)
-        
-        # Determine if it was a cache hit for scraped data (curated is always fresh)
-        cache_hit = bool(raw_scraped_places)
         
         # Apply directional filter if heading provided
         if heading is not None:
@@ -3397,15 +3726,29 @@ def next_best_action(request):
             else:
                 print("DEBUG: Directional filter returned 0 places; using unfiltered set")
         
-        # Solve for next best action
+        # Optional: number of steps (default 2 for rolling horizon)
+        max_steps = int(data.get('max_steps', 2))
+        
+        # Solve for next action
         solver = NBASolver()
-        result = solver.solve_next_action(
-            user_location=(latitude, longitude),
-            heading=float(heading) if heading is not None else None,
-            current_time=current_time,
-            places=places,
-            user_preferences=user_preferences
-        )
+        
+        if max_steps > 2:
+            # Recursive Chain Solver (Full Day)
+            result = solver.generate_full_day_itinerary(
+                user_location=(latitude, longitude),
+                start_time=current_time,
+                places=places,
+                max_steps=max_steps
+            )
+        else:
+            # Rolling Horizon Solver (Next 2 steps + Backup)
+            result = solver.solve_next_action(
+                user_location=(latitude, longitude),
+                heading=float(heading) if heading is not None else None,
+                current_time=current_time,
+                places=places,
+                user_preferences=user_preferences
+            )
         
         response_time_ms = int((time.time() - start_time) * 1000)
         result['cache_hit'] = cache_hit

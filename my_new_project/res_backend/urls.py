@@ -9,8 +9,10 @@ from .views import (
     get_scraped_restaurants, get_scraped_restaurant_detail, create_scraped_restaurant,
     generate_and_enrich_itinerary, get_pre_created_itineraries, 
     pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
-    next_best_action
+    next_best_action, create_itinerary_skeleton, get_address_suggestions_view,
+    get_hotspot_itinerary
 )
+from .density_heatmap import get_density_heatmap
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -54,4 +56,9 @@ urlpatterns = [
     path('discovery/pre-created-itineraries/<int:itinerary_id>/', get_pre_created_itinerary_detail, name='pre-created-itinerary-detail'),
     path('discovery/pre-create-itineraries/', pre_create_itineraries, name='pre-create-itineraries'),
     path('discovery/featured-itineraries/', get_featured_itineraries, name='featured-itineraries'),
+    path('itineraries/create-skeleton/', create_itinerary_skeleton, name='create-itinerary-skeleton'),
+    path('address-suggestions/', get_address_suggestions_view, name='address-suggestions'),
+    # Heatmap \u0026 Density endpoints
+    path('neighborhoods/density/', get_density_heatmap, name='neighborhood-density'),
+    path('neighborhoods/itinerary/', get_hotspot_itinerary, name='hotspot-itinerary'),
 ]

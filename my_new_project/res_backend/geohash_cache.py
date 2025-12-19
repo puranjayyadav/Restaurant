@@ -12,6 +12,7 @@ from django.db.models import Q
 from .models import ScrapedPlaceCache
 from thefuzz import fuzz # For fuzzy name matching
 from supabase import create_client # Moved here to avoid circular dependencies in some contexts
+from decouple import config
 
 # --- Utils ---
 
@@ -169,7 +170,12 @@ def get_cached_places(geohash: str, query_context: str) -> Optional[List[Dict]]:
             cache_entry.hit_count += 1
             cache_entry.save(update_fields=['hit_count'])
             
-            return cache_entry.places_data
+            places = cache_entry.places_data
+            if isinstance(places, list):
+                for p in places:
+                    if not p.get('notes'):
+                        p['notes'] = p.get('description', '')
+            return places
     except Exception as e:
         # Log error but don't fail - fall back to scraping
         print(f"ERROR: Cache lookup failed for {geohash}/{query_context}: {e}")
@@ -310,7 +316,7 @@ def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.
     Returns:
         List of curated place dictionaries
     """
-    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    supabase = create_client(config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY")))
     curated_places: List[Dict] = []
     seen_names: Set[str] = set()  # To prevent duplicate curated places from different articles
     
@@ -382,7 +388,7 @@ def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.
                     "source_url": article_url,
                     "rating": stop_info.get("rating") or 4.5,  # Default good rating for curated
                     "types": _infer_types_from_name(stop_name),
-                    "custom_notes": stop_info.get("description") or stop_info.get("notes") or "",
+                    "notes": stop_info.get("description") or stop_info.get("notes") or "",
                     # Vibe/preference data from solver_data
                     "vibe_tags": vibe_tags,
                     "time_bias": solver_data.get("time_bias") or stop_info.get("time_bias") or None,
@@ -415,7 +421,7 @@ def get_curated_from_yelp_restaurants(lat: float, lon: float, radius_km: float =
     Returns:
         List of curated place dictionaries
     """
-    supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    supabase = create_client(config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY")))
     curated_places: List[Dict] = []
     
     try:
@@ -488,3 +494,64 @@ def get_curated_from_yelp_restaurants(lat: float, lon: float, radius_km: float =
     # print(f"DEBUG: Found {len(curated_places)} curated Yelp places within {radius_km}km")
     return curated_places
 
+
+def get_neighborhood_cluster_rpc(
+    lat: float, 
+    lon: float, 
+    radius_meters: float = 1500
+) -> Tuple[List[Dict], bool]:
+    """
+    Fetch places using PostGIS-based Supabase RPC for fast spatial queries.
+    
+    This function calls the 'get_neighborhood_cluster' RPC which uses ST_DWithin
+    for database-level filtering, returning only places within the radius.
+    
+    Args:
+        lat: Center latitude
+        lon: Center longitude  
+        radius_meters: Search radius in meters (default 1500m)
+    
+    Returns:
+        Tuple of (places list, rpc_success bool)
+    """
+    try:
+        supabase = create_client(
+            config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), 
+            config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        )
+        
+        # Call the PostGIS RPC function
+        response = supabase.rpc('get_neighborhood_cluster', {
+            'center_lat': lat,
+            'center_lng': lon,
+            'radius_meters': radius_meters
+        }).execute()
+        
+        if response.data:
+            # Transform RPC response to match solver's expected format
+            places = []
+            for item in response.data:
+                places.append({
+                    'place_id': str(item.get('id')),
+                    'name': item.get('name'),
+                    'rating': item.get('rating'),
+                    'user_ratings_total': item.get('user_ratings_total'),
+                    'vibe_tags': item.get('vibe_tags') or [],
+                    'categories': item.get('categories') or [],
+                    'types': item.get('categories') or [],  # Alias for solver
+                    'lat': item.get('lat'),
+                    'lng': item.get('lng'),
+                    'distance_m': item.get('distance_m'),
+                    'notes': item.get('notes') or item.get('description') or '',
+                    'is_clustered': True,  # Mark as from PostGIS cluster
+                    'source': 'postgis_rpc',
+                })
+            
+            print(f"DEBUG: PostGIS RPC returned {len(places)} places within {radius_meters}m")
+            return places, True
+        
+        return [], True  # RPC succeeded but no results
+        
+    except Exception as e:
+        print(f"WARNING: PostGIS RPC failed (falling back to Python filtering): {e}")
+        return [], False

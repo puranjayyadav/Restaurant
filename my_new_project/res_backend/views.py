@@ -207,20 +207,26 @@ def get_hotspot_itinerary(request):
         from decouple import config
         from .models import ScrapedRestaurant
         
-        supabase = create_client(
-            config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), 
-            config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
-        )
-        
-        # Query curated articles
-        response = (
-            supabase.table("lemon8_articles")
-            .select("url, enriched_itinerary_data")
-            .not_.is_("enriched_itinerary_data", "null")
-            .execute()
-        )
-        candidates_data = response.data or []
-        print(f"[Hotspot] Lemon8 candidates: {len(candidates_data)}")
+        url = config("SUPABASE_URL", default=os.getenv("SUPABASE_URL"))
+        key = config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        candidates_data = []
+
+        if url and key:
+            try:
+                supabase = create_client(url, key)
+                # Query curated articles
+                response = (
+                    supabase.table("lemon8_articles")
+                    .select("url, enriched_itinerary_data")
+                    .not_.is_("enriched_itinerary_data", "null")
+                    .execute()
+                )
+                candidates_data = response.data or []
+                print(f"[Hotspot] Lemon8 candidates: {len(candidates_data)}")
+            except Exception as se:
+                print(f"[Hotspot] Supabase fetch failed: {se}")
+        else:
+            print("[Hotspot] Skipping Supabase: Credentials missing.")
         
         # 2. Add high-quality local restaurants from PostgreSQL (EXPANDED POOL)
         # Search radius: ~5km (0.05 degrees) for much more variety

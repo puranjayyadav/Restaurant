@@ -6,6 +6,8 @@
 # Credentials and secrets (NEVER commit these!)
 creds/
 *.json
+!railway.json
+!my_new_project/railway.json
 !package.json
 !package-lock.json
 *-adminsdk-*.json
@@ -47,6 +49,8 @@ ENV/
 # Logs
 *.log
 *.txt
+!requirements.txt
+!my_new_project/requirements.txt
 extraction_log.txt
 test_output.txt
 

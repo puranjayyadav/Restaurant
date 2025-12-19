@@ -176,38 +176,45 @@ def calculate_grid_density(lat: float, lng: float,
                 # Using source='lemon8' or high rating/quality score
                 query += " AND (source = 'lemon8' OR rating >= 4.0 OR data_quality_score >= 80)"
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
+            try:
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+            except Exception as e:
+                print(f"[ERROR] DB Query failed in cell {cell['id']}: {e}\nQuery: {query}\nParams: {params}")
+                continue
             
             # Initial tracking for this cell
             cell_scores = {'coffee': 0, 'nightlife': 0, 'arts': 0, 'food': 0}
             total_places = 0
             
             # --- PROCESS DB VENUES ---
-            for row in rows:
-                cat_str, rating, price, hours, raw_data = row
-                cat = _normalize_category(cat_str)
-                
-                # SATURATION CAPPING: If this category is already strong in this cell, skip it
-                # This ensures we don't just see a "Restaurant Map"
-                if is_balanced_view and cell_scores[cat] >= vibe_caps.get(cat, 50):
-                    continue
-                
-                # Scoring Logic
-                score = 0
-                if rating and rating >= 4.5: score += 15
-                elif rating and rating >= 4.0: score += 8
-                else: score += 2
-                
-                if price: score += 5
-                if hours and hours != '{}': score += 10
-                
-                # Apply Vibe Weight in Balanced View
-                if is_balanced_view:
-                    score *= vibe_weights.get(cat, 1.0)
+            try:
+                for row in rows:
+                    cat_str, rating, price, hours, raw_data = row
+                    cat = _normalize_category(cat_str)
+                    
+                    # SATURATION CAPPING: If this category is already strong in this cell, skip it
+                    if is_balanced_view and cell_scores[cat] >= vibe_caps.get(cat, 50):
+                        continue
+                    
+                    # Scoring Logic
+                    score = 0
+                    if rating and rating >= 4.5: score += 15
+                    elif rating and rating >= 4.0: score += 8
+                    else: score += 2
+                    
+                    if price: score += 5
+                    if hours and hours != '{}': score += 10
+                    
+                    # Apply Vibe Weight in Balanced View
+                    if is_balanced_view:
+                        score *= vibe_weights.get(cat, 1.0)
 
-                cell_scores[cat] += score
-                total_places += 1
+                    cell_scores[cat] += score
+                    total_places += 1
+            except Exception as e:
+                print(f"[ERROR] Data processing failed in cell {cell['id']}: {e}")
+                continue
 
             # --- PROCESS CURATED PLACES (Anchors) ---
             cell_curated_count = 0

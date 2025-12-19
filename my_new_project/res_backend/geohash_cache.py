@@ -316,11 +316,18 @@ def get_curated_places_from_lemon8(lat: float, lon: float, radius_km: float = 2.
     Returns:
         List of curated place dictionaries
     """
-    supabase = create_client(config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY")))
     curated_places: List[Dict] = []
-    seen_names: Set[str] = set()  # To prevent duplicate curated places from different articles
+    seen_names: Set[str] = set()
     
     try:
+        url = config("SUPABASE_URL", default=os.getenv("SUPABASE_URL"))
+        key = config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        
+        if not url or not key:
+            print("WARNING: Supabase credentials missing. Skipping curated places.")
+            return []
+            
+        supabase = create_client(url, key)
         # Fetch all articles with enriched data. We filter by proximity in Python for flexibility.
         response = (
             supabase.table("lemon8_articles")
@@ -421,10 +428,18 @@ def get_curated_from_yelp_restaurants(lat: float, lon: float, radius_km: float =
     Returns:
         List of curated place dictionaries
     """
-    supabase = create_client(config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY")))
     curated_places: List[Dict] = []
     
     try:
+        url = config("SUPABASE_URL", default=os.getenv("SUPABASE_URL"))
+        key = config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        
+        if not url or not key:
+            print("WARNING: Supabase credentials missing. Skipping Yelp curated places.")
+            return []
+
+        supabase = create_client(url, key)
+        
         # Supabase RPC call for geospatial query
         # This function should be defined in Supabase as an SQL function
         # For example, named 'get_yelp_places_in_radius'
@@ -515,10 +530,13 @@ def get_neighborhood_cluster_rpc(
         Tuple of (places list, rpc_success bool)
     """
     try:
-        supabase = create_client(
-            config("SUPABASE_URL", default=os.getenv("SUPABASE_URL")), 
-            config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
-        )
+        url = config("SUPABASE_URL", default=os.getenv("SUPABASE_URL"))
+        key = config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
+        
+        if not url or not key:
+            return [], False
+            
+        supabase = create_client(url, key)
         
         # Call the PostGIS RPC function
         response = supabase.rpc('get_neighborhood_cluster', {

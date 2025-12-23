@@ -17,8 +17,8 @@ from supabase_storage import save_batch_to_supabase, supabase
 from enrich_supabase_reviews import batch_enrich_venues_with_reviews
 
 # Configuration
-VIBES_PER_RUN = 2  # Scrape 2 vibes per run (15 min schedule = ~8 vibes/hour)
-REVIEWS_PER_RUN = 5  # Enrich 5 venues with reviews per run
+VIBES_PER_RUN = 5  # Scrape 5 vibes per run (15 min schedule = ~20 vibes/hour)
+REVIEWS_PER_RUN = 15  # Enrich 15 venues with reviews per run
 
 # Define a subset of vibes to rotate through
 VIBE_ROTATION = [

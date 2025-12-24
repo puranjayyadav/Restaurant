@@ -11,6 +11,8 @@ on:
 jobs:
   scrape-and-enrich:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 14  # Timeout before next run starts
     
     steps:

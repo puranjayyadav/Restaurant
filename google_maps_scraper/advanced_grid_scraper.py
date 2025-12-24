@@ -26,10 +26,10 @@ try:
     from supabase_storage import save_batch_to_supabase, supabase
     SUPABASE_ENABLED = supabase is not None
     if SUPABASE_ENABLED:
-        print("✅ Supabase integration enabled")
+        print("Supabase integration enabled")
 except ImportError:
     SUPABASE_ENABLED = False
-    print("ℹ️  Supabase integration not available (install: pip install supabase python-decouple)")
+    print("Supabase integration not available (install: pip install supabase python-decouple)")
 
 # Configuration
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")  # Optional: Set in your env vars
@@ -503,7 +503,7 @@ if __name__ == "__main__":
 
     # Outer Loop: Area Groups
     for area_group, neighborhoods in NYC_AREAS.items():
-        print(f"\n██████ STARTING BATCH: {area_group} ██████")
+        print(f"\n=== STARTING BATCH: {area_group} ===")
         
         # PRO TIP: Shuffle the list so you don't always scrape in the exact same alphabetical order.
         # This helps avoid bot detection patterns.

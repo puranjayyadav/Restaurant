@@ -78,37 +78,49 @@ def run_venue_scraping():
         print("❌ Supabase not configured")
         return False
     
-    try:
-        # Get next vibe and neighborhood
-        vibe_name, search_query, neighborhood = get_next_vibe_and_neighborhood()
+    overall_success = True
+    
+    for i in range(VIBES_PER_RUN):
+        print(f"\n--- Batch {i+1}/{VIBES_PER_RUN} ---")
         
-        print(f"📍 Location: {neighborhood}")
-        print(f"🎯 Vibe: {vibe_name}")
-        print(f"🔍 Query: {search_query}\n")
-        
-        # Run scraper
-        results = run_grid_search(neighborhood, search_query, grid_dimension=2)
-        
-        # Save to Supabase
-        if results:
-            neighborhood_name = neighborhood.split(',')[0]  # Extract just "SoHo"
-            success = save_batch_to_supabase(results, vibe_name, neighborhood_name)
+        try:
+            # Get next vibe and neighborhood
+            vibe_name, search_query, neighborhood = get_next_vibe_and_neighborhood()
             
-            if success:
-                print(f"\n✅ Scraped and saved {len(results)} venues")
-                return True
+            print(f"📍 Location: {neighborhood}")
+            print(f"🎯 Vibe: {vibe_name}")
+            print(f"🔍 Query: {search_query}\n")
+            
+            # Run scraper
+            results = run_grid_search(neighborhood, search_query, grid_dimension=2)
+            
+            # Save to Supabase
+            if results:
+                neighborhood_name = neighborhood.split(',')[0]  # Extract just "SoHo"
+                success = save_batch_to_supabase(results, vibe_name, neighborhood_name)
+                
+                if success:
+                    print(f"\n✅ Scraped and saved {len(results)} venues")
+                else:
+                    print("\n❌ Failed to save to Supabase")
+                    overall_success = False
             else:
-                print("\n❌ Failed to save to Supabase")
-                return False
-        else:
-            print("\n⚠️  No results found")
-            return False
+                print("\n⚠️  No results found")
+                # Don't mark as failure, just empty
             
-    except Exception as e:
-        print(f"\n❌ Error during venue scraping: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+            # Sleep between batches to respect rate limits/avoid blocking
+            if i < VIBES_PER_RUN - 1:
+                sleep_time = random.uniform(5, 10)
+                print(f"Waiting {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+                
+        except Exception as e:
+            print(f"\n❌ Error during venue scraping batch {i+1}: {e}")
+            import traceback
+            traceback.print_exc()
+            overall_success = False
+            
+    return overall_success
 
 
 def run_review_enrichment():

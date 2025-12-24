@@ -446,70 +446,69 @@ def run_grid_search(location_name: str, search_query: str, grid_dimension: int =
 
 
 
+# --- 2. DEFINE VIBES ---
+VIBE_LIST = {
+    "work_friendly": "laptop friendly coffee shop with wifi and outlets",
+    "aesthetic": "instagrammable cute cafe pastel decor",
+    "speakeasy": "hidden speakeasy bar entrance behind bookshelf",
+    "coffee_run": "specialty coffee roasters espresso bar grab and go",
+    "breakfast_classic": "classic breakfast diner pancakes eggs bacon american",
+    "brunch_buzzy": "popular brunch spot avocado toast bottomless mimosas outdoor seating",
+    "bakery_cafe": "artisan bakery fresh pastries croissants coffee shop",
+    "casual_lunch": "casual lunch spot sandwiches salads fast casual healthy",
+    "dinner_date": "romantic dinner restaurant candlelit cozy atmosphere date night",
+    "dinner_group": "lively dinner restaurant sharing plates tapas large groups",
+    "fine_dining": "upscale fine dining tasting menu michelin guide style",
+    "late_night_eats": "late night food open late pizza tacos burgers 24 hours",
+    "listening_bar": "audiophile vinyl listening bar hi-fi kissa", 
+    "dive_bar": "old school dive bar cheap drinks jukebox cash only",
+    "natural_wine": "natural wine bar organic funky orange wine",
+    "rooftop": "rooftop bar with skyline view",
+    "dark_academia": "moody dark cafe library aesthetic books leather",
+    "urban_jungle": "plant filled cafe greenhouse indoor garden",
+    "minimalist": "scandi minimalist coffee shop white interior design",
+    "retro_vintage": "mid-century modern bar retro 70s decor",
+    "solo_date": "restaurant with bar seating for solo dining people watching",
+    "art_house": "coffee shop with art gallery walls creative space",
+    "tea_sanctuary": "traditional japanese tea house matcha ceremony quiet",
+    "board_games": "board game cafe uncommons"
+}
+
+# --- 3. DEFINE NEIGHBORHOODS ---
+NYC_AREAS = {
+    # === BATCH 1: MANHATTAN SOUTH ===
+    "Manhattan_South": [
+        "Financial District", "Tribeca", "SoHo", "Little Italy", 
+        "Chinatown", "Lower East Side", "East Village", 
+        "West Village", "Greenwich Village"
+    ],
+
+    # === BATCH 2: MANHATTAN MID ===
+    "Manhattan_Mid": [
+        "Chelsea", "Meatpacking District", "Flatiron District", 
+        "Gramercy Park", "Midtown West", "Hell's Kitchen", 
+        "Koreatown", "Murray Hill"
+    ],
+
+    # === BATCH 3: BROOKLYN HOTSPOTS ===
+    "Brooklyn_Hotspots": [
+        "Williamsburg", "Greenpoint", "DUMBO", "Brooklyn Heights", 
+        "Cobble Hill", "Bushwick", "Bed-Stuy"
+    ],
+    
+    # === BATCH 4: QUEENS HOTSPOTS ===
+    "Queens_Hotspots": [
+        "Long Island City", "Astoria", "Sunnyside", 
+        "Jackson Heights", "Flushing"
+    ]
+}
+
 if __name__ == "__main__":
     import time
     import random
 
     # --- 1. SETTINGS ---
-    GRID_SIZE = 2  
-    
-    # --- 2. DEFINE VIBES ---
-    VIBE_LIST = {
-        # ... (Your VIBE_LIST stays exactly the same as above) ...
-        "breakfast_classic": "classic breakfast diner pancakes eggs bacon american",
-        "brunch_buzzy": "popular brunch spot avocado toast bottomless mimosas outdoor seating",
-        "coffee_run": "specialty coffee roasters espresso bar grab and go",
-        "bakery_cafe": "artisan bakery fresh pastries croissants coffee shop",
-        "casual_lunch": "casual lunch spot sandwiches salads fast casual healthy",
-        "dinner_date": "romantic dinner restaurant candlelit cozy atmosphere date night",
-        "dinner_group": "lively dinner restaurant sharing plates tapas large groups",
-        "fine_dining": "upscale fine dining tasting menu michelin guide style",
-        "late_night_eats": "late night food open late pizza tacos burgers 24 hours",
-        "work_friendly": "laptop friendly coffee shop with wifi and outlets",
-        "aesthetic": "instagrammable cute cafe pastel decor",
-        "speakeasy": "hidden speakeasy bar entrance behind bookshelf",
-        "listening_bar": "audiophile vinyl listening bar hi-fi kissa", 
-        "dive_bar": "old school dive bar cheap drinks jukebox cash only",
-        "natural_wine": "natural wine bar organic funky orange wine",
-        "rooftop": "rooftop bar with skyline view",
-        "dark_academia": "moody dark cafe library aesthetic books leather",
-        "urban_jungle": "plant filled cafe greenhouse indoor garden",
-        "minimalist": "scandi minimalist coffee shop white interior design",
-        "retro_vintage": "mid-century modern bar retro 70s decor",
-        "solo_date": "restaurant with bar seating for solo dining people watching",
-        "art_house": "coffee shop with art gallery walls creative space",
-        "tea_sanctuary": "traditional japanese tea house matcha ceremony quiet",
-        "board_games": "board game cafe uncommons"
-    }
-
-    # --- 3. DEFINE NEIGHBORHOODS (ALL UNCOMMENTED) ---
-    NYC_AREAS = {
-        # === BATCH 1: MANHATTAN SOUTH ===
-        "Manhattan_South": [
-            "Financial District", "Tribeca", "SoHo", "Little Italy", 
-            "Chinatown", "Lower East Side", "East Village", 
-            "West Village", "Greenwich Village"
-        ],
-
-        # === BATCH 2: MANHATTAN MID ===
-        "Manhattan_Mid": [
-            "Chelsea", "Meatpacking District", "Flatiron District", 
-            "Gramercy Park", "Midtown West", "Hell's Kitchen", 
-            "Koreatown", "Murray Hill"
-        ],
-
-        # === BATCH 3: BROOKLYN HOTSPOTS ===
-        "Brooklyn_Hotspots": [
-            "Williamsburg", "Greenpoint", "DUMBO", "Brooklyn Heights", 
-            "Cobble Hill", "Bushwick", "Bed-Stuy"
-        ],
-        
-        # === BATCH 4: QUEENS HOTSPOTS ===
-        "Queens_Hotspots": [
-            "Long Island City", "Astoria", "Sunnyside", 
-            "Jackson Heights", "Flushing"
-        ]
-    }
+    GRID_SIZE = 2
 
     print("--- Starting Full Run (All Neighborhoods) ---")
 

@@ -12,7 +12,7 @@ from datetime import datetime
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from advanced_grid_scraper import run_grid_search
+from advanced_grid_scraper import run_grid_search, VIBE_LIST, NYC_AREAS
 from supabase_storage import save_batch_to_supabase, supabase
 from enrich_supabase_reviews import batch_enrich_venues_with_reviews
 
@@ -20,26 +20,14 @@ from enrich_supabase_reviews import batch_enrich_venues_with_reviews
 VIBES_PER_RUN = 5  # Scrape 5 vibes per run (15 min schedule = ~20 vibes/hour)
 REVIEWS_PER_RUN = 15  # Enrich 15 venues with reviews per run
 
-# Define a subset of vibes to rotate through
-VIBE_ROTATION = [
-    ("work_friendly", "laptop friendly coffee shop with wifi and outlets"),
-    ("aesthetic", "instagrammable cute cafe pastel decor"),
-    ("speakeasy", "hidden speakeasy bar entrance behind bookshelf"),
-    ("coffee_run", "specialty coffee roasters espresso bar grab and go"),
-    ("brunch_buzzy", "popular brunch spot avocado toast bottomless mimosas"),
-    ("rooftop", "rooftop bar with skyline view"),
-    ("natural_wine", "natural wine bar organic funky orange wine"),
-    ("dinner_date", "romantic dinner restaurant candlelit cozy atmosphere"),
-]
+# Flatten VIBE_LIST to list of tuples for rotation
+VIBE_ROTATION = list(VIBE_LIST.items())
 
-# Neighborhoods to cycle through
-NEIGHBORHOODS = [
-    "SoHo, New York, NY",
-    "Williamsburg, New York, NY",
-    "East Village, New York, NY",
-    "West Village, New York, NY",
-    "Tribeca, New York, NY",
-]
+# Flatten NYC_AREAS to a simple list of "Neighborhood, New York, NY"
+NEIGHBORHOODS = []
+for area_group in NYC_AREAS.values():
+    for neighborhood in area_group:
+        NEIGHBORHOODS.append(f"{neighborhood}, New York, NY")
 
 def get_next_vibe_and_neighborhood():
     """

@@ -53,6 +53,7 @@ ENV/
 !requirements.txt
 !my_new_project/requirements.txt
 !runtime.txt
+!google_maps_scraper/scraper_counter.txt
 extraction_log.txt
 test_output.txt
 

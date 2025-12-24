@@ -32,28 +32,54 @@ for area_group in NYC_AREAS.values():
 def get_next_vibe_and_neighborhood():
     """
     Rotate through vibes and neighborhoods to avoid scraping the same thing repeatedly.
-    Uses a simple file-based counter.
+    Uses Supabase to persist state (avoiding git commit conflicts).
     """
-    counter_file = "scraper_counter.txt"
-    
-    if os.path.exists(counter_file):
-        with open(counter_file, 'r') as f:
-            counter = int(f.read().strip())
-    else:
-        counter = 0
-    
-    # Get vibe and neighborhood based on counter
-    vibe_idx = counter % len(VIBE_ROTATION)
-    neighborhood_idx = (counter // len(VIBE_ROTATION)) % len(NEIGHBORHOODS)
-    
-    vibe_name, search_query = VIBE_ROTATION[vibe_idx]
-    neighborhood = NEIGHBORHOODS[neighborhood_idx]
-    
-    # Increment counter
-    with open(counter_file, 'w') as f:
-        f.write(str(counter + 1))
-    
-    return vibe_name, search_query, neighborhood
+    if not supabase:
+        # Fallback to random if Supabase fails
+        import random
+        vibe_idx = random.randint(0, len(VIBE_ROTATION) - 1)
+        neighborhood_idx = random.randint(0, len(NEIGHBORHOODS) - 1)
+        vibe_name, search_query = VIBE_ROTATION[vibe_idx]
+        neighborhood = NEIGHBORHOODS[neighborhood_idx]
+        return vibe_name, search_query, neighborhood
+
+    try:
+        # 1. Fetch current index from 'scraper_state' table
+        # We assume a single row with id=1 stores the state
+        response = supabase.table("scraper_state").select("last_index").eq("id", 1).execute()
+        
+        if response.data:
+            counter = response.data[0]['last_index']
+        else:
+            # Initialize table if empty
+            counter = 0
+            supabase.table("scraper_state").insert({"id": 1, "last_index": 0}).execute()
+        
+        # 2. Calculate next targets
+        total_combinations = len(VIBE_ROTATION) * len(NEIGHBORHOODS)
+        
+        # Determine strict indices
+        vibe_idx = counter % len(VIBE_ROTATION)
+        neighborhood_idx = (counter // len(VIBE_ROTATION)) % len(NEIGHBORHOODS)
+        
+        vibe_name, search_query = VIBE_ROTATION[vibe_idx]
+        neighborhood = NEIGHBORHOODS[neighborhood_idx]
+        
+        # 3. Increment and Save back to Supabase
+        new_counter = (counter + 1) % total_combinations # Wrap around eventually
+        supabase.table("scraper_state").update({"last_index": new_counter}).eq("id", 1).execute()
+        
+        return vibe_name, search_query, neighborhood
+        
+    except Exception as e:
+        print(f"Error managing state with Supabase: {e}")
+        # Fallback to random
+        import random
+        vibe_idx = random.randint(0, len(VIBE_ROTATION) - 1)
+        neighborhood_idx = random.randint(0, len(NEIGHBORHOODS) - 1)
+        vibe_name, search_query = VIBE_ROTATION[vibe_idx]
+        neighborhood = NEIGHBORHOODS[neighborhood_idx]
+        return vibe_name, search_query, neighborhood
 
 
 def run_venue_scraping():

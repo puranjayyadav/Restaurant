@@ -56,6 +56,16 @@ def save_reviews_to_supabase(place_id: str, reviews: List[Dict[str, Any]]) -> bo
         ).execute()
         
         print(f"      [✅] Saved {len(reviews)} reviews for {place_id}")
+        
+        # Update venue's scraped_review_count to reflect that we processed it
+        # This prevents picking it up again in the next batch
+        try:
+            supabase.table("venues").update({
+                "scraped_review_count": len(reviews)
+            }).eq("place_id", place_id).execute()
+        except Exception as update_err:
+            print(f"      [⚠️] Failed to update venue review count: {update_err}")
+
         return True
         
     except Exception as e:

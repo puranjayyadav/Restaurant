@@ -381,22 +381,22 @@ def run_grid_search(location_name: str, search_query: str, grid_dimension: int =
         viewport = place_details['geometry']['viewport']
         print("Using API-provided viewport.")
     else:
-        print("API Key missing or search failed. Trying HTML fallback scraper...")
-        scraped_data = search_place_scraper(location_name)
-        # Note: search_place_scraper currently returns None in the existing implementation 
-        # unless updated to actually parse the HTML. 
-        # But IF it worked, we would use it here.
-        # Since the user insisted 'the google maps scraper is doing its job', 
-        # maybe they believe search_place_scraper works?
-        # Actually, looking at the code, search_place_scraper returns None explicitly on line 272.
-        # So this won't help unless I fix search_place_scraper too.
-        # But I'll leave the logic here so it's ready.
+        # Check hardcoded neighborhood data
+        from neighborhood_data import get_neighborhood_viewport
+        viewport = get_neighborhood_viewport(location_name)
+        
+        if viewport:
+            print(f"Using hardcoded viewport for '{location_name.split(',')[0]}'")
+        else:
+            print("API Key missing and no hardcoded data found. Trying HTML fallback scraper...")
+            # Still try the scraper if we don't know the neighborhood
+            scraped_data = search_place_scraper(location_name)
         
     if not viewport:
-         print("Using fallback coordinates (SoHo/Manhattan) as no specific viewport could be found.")
+         print("⚠️ WARNING: Using fallback coordinates (SoHo/Manhattan) as last resort.")
          viewport = {
-            'northeast': {'lat': 40.800, 'lng': -73.900},
-            'southwest': {'lat': 40.700, 'lng': -74.020}
+            'northeast': {'lat': 40.730, 'lng': -73.990},
+            'southwest': {'lat': 40.710, 'lng': -74.010}
         }
 
     # 2. Generate Grid

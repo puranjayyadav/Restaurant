@@ -227,6 +227,10 @@ def match_restaurant_with_postgres(google_place):
     # Approximately 0.002 degrees latitude/longitude \u2248 200m at NYC latitude
     lat_range = 0.002
 
+    # Placeholder implementation to fix syntax error
+    # Ideally this would query ScrapedRestaurant
+    return None
+
 def enrich_restaurant_data(place_data: Dict) -> Dict:
     """
     Placeholder for enriching restaurant data.

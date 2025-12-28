@@ -29,6 +29,8 @@ def save_reviews_to_supabase(place_id: str, reviews: List[Dict[str, Any]]) -> bo
     Returns:
         True if successful, False otherwise
     """
+    import hashlib
+
     if not supabase:
         print("      [⚠️] Supabase not configured")
         return False
@@ -40,37 +42,85 @@ def save_reviews_to_supabase(place_id: str, reviews: List[Dict[str, Any]]) -> bo
     # Prepare review data
     reviews_data = []
     for review in reviews:
+        text_content = review.get('text', '')
+        # Generate MD5 hash of text for unique constraint
+        text_hash = hashlib.md5(text_content.encode('utf-8')).hexdigest()
+        
         reviews_data.append({
             "place_id": place_id,
             "author": review.get('author', 'Unknown'),
             "rating": review.get('rating'),
-            "text": review.get('text', ''),
-            "text_length": review.get('length', len(review.get('text', '')))
+            "text": text_content,
+            "text_length": review.get('length', len(text_content)),
+            "review_hash": text_hash
         })
     
     try:
-        # Upsert reviews (will skip duplicates due to UNIQUE constraint)
+        # Upsert reviews (now using hash based constraint)
         supabase.table("reviews").upsert(
             reviews_data,
-            on_conflict="place_id,author,text"
+            on_conflict="place_id,author,review_hash"
         ).execute()
         
         print(f"      [✅] Saved {len(reviews)} reviews for {place_id}")
         
-        # Update venue's scraped_review_count to reflect that we processed it
-        # This prevents picking it up again in the next batch
-        try:
-            supabase.table("venues").update({
-                "scraped_review_count": len(reviews)
-            }).eq("place_id", place_id).execute()
-        except Exception as update_err:
-            print(f"      [⚠️] Failed to update venue review count: {update_err}")
-
-        return True
-        
     except Exception as e:
-        print(f"      [❌] Error saving reviews: {e}")
-        return False
+        # Check for missing constraint error (Postgres 42P10)
+        # Error saving reviews: {'message': 'there is no unique or exclusion constraint matching the ON CONFLICT specification', 'code': '42P10', ...}
+        error_str = str(e)
+        if "42P10" in error_str or "no unique or exclusion constraint" in error_str:
+            print(f"      [⚠️] Database constraint missing, parsing manually...")
+            _manual_upsert_reviews(reviews_data)
+        else:
+            print(f"      [❌] Error saving reviews: {e}")
+            return False
+
+    # Update venue's scraped_review_count to reflect that we processed it
+    # This prevents picking it up again in the next batch
+    try:
+        supabase.table("venues").update({
+            "scraped_review_count": len(reviews)
+        }).eq("place_id", place_id).execute()
+    except Exception as update_err:
+        print(f"      [⚠️] Failed to update venue review count: {update_err}")
+
+    return True
+
+
+def _manual_upsert_reviews(reviews_data: List[Dict[str, Any]]):
+    """
+    Fallback function to save reviews one by one when bulk upsert fails 
+    due to missing database constraints.
+    """
+    saved_count = 0
+    skipped_count = 0
+    
+    for review in reviews_data:
+        try:
+            # Check if this exact review already exists using the hash
+            # We want to avoid duplicates of the exact same review
+            existing = (
+                supabase.table("reviews")
+                .select("id")
+                .eq("place_id", review["place_id"])
+                .eq("author", review["author"])
+                .eq("review_hash", review["review_hash"])
+                .execute()
+            )
+            
+            if existing.data and len(existing.data) > 0:
+                # Review exists, skip
+                skipped_count += 1
+                continue
+            
+            # If not found, insert
+            supabase.table("reviews").insert(review).execute()
+            saved_count += 1
+            
+        except Exception as e:
+            print(f"      [⚠️] Failed to save individual review: {e}")
+            
+    print(f"      [✅] Manually saved {saved_count} reviews (skipped {skipped_count} duplicates)")
 
 
 def get_venues_without_reviews(limit: int = 100, min_rating: float = 4.0) -> List[Dict[str, Any]]:

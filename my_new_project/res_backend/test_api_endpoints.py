@@ -6,7 +6,23 @@ import json
 import uuid
 
 class APIPerformanceTests(TestCase):
+    """
+    Tests to measure and verify the performance characteristics of API endpoints.
+
+    This test suite focuses on identifying potential bottlenecks, specifically
+    large data egress issues in list endpoints.
+    """
+
     def setUp(self):
+        """
+        Sets up the test environment with dummy data.
+
+        Creates:
+            - A large dummy text payload (50KB).
+            - A heavy itinerary data structure containing 10 restaurants, each
+              simulating massive Postgres data (reviews, photos, menus).
+            - 5 featured PreCreatedItinerary objects populated with this heavy data.
+        """
         self.client = APIClient()
 
         # Create a large dummy payload to simulate heavy restaurant data
@@ -46,8 +62,17 @@ class APIPerformanceTests(TestCase):
 
     def test_get_featured_itineraries_payload_size(self):
         """
-        Test that fetches the list of featured itineraries and measures response size.
-        This demonstrates the 'huge egress' issue.
+        Tests the `featured-itineraries` endpoint to measure response size.
+
+        This test fetches the list of featured itineraries and calculates the
+        total content size in MB. It serves to verify if the endpoint is
+        returning excessive data (e.g., full restaurant details) in the list view.
+
+        Asserts:
+            - HTTP Status Code is 200 OK.
+            - The response contains the expected number of itineraries.
+            - The response structure includes the heavy `itinerary_data` field
+              (confirming the source of the data bloat).
         """
         print("\n--- PERFORMANCE TEST: get_featured_itineraries ---")
         response = self.client.get('/api/discovery/featured-itineraries/?limit=5')
@@ -81,8 +106,16 @@ class APIPerformanceTests(TestCase):
 
     def test_get_pre_created_itinerary_detail(self):
         """
-        Test fetching a single itinerary detail.
-        This is where the heavy data SHOULD be.
+        Tests the itinerary detail endpoint.
+
+        Verifies that fetching a single itinerary by ID correctly returns
+        the full details, including the `itinerary_data` blob. This ensures
+        that optimizing the list view doesn't break the detail view.
+
+        Asserts:
+            - HTTP Status Code is 200 OK.
+            - The response ID matches the requested ID.
+            - The `itinerary_data` field is present.
         """
         print("\n--- FUNCTIONAL TEST: get_pre_created_itinerary_detail ---")
         itinerary = PreCreatedItinerary.objects.first()

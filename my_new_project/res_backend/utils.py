@@ -229,11 +229,18 @@ def match_restaurant_with_postgres(google_place):
 
     # Placeholder implementation to fix syntax error
     # Ideally this would query ScrapedRestaurant
+    # TODO: Implement actual fuzzy matching against Postgres database
     return None
 
 def enrich_restaurant_data(place_data: Dict) -> Dict:
     """
-    Placeholder for enriching restaurant data.
+    Placeholder for enriching restaurant data with additional info from external sources or DB.
+
+    Args:
+        place_data: Dictionary containing basic place information.
+
+    Returns:
+        The enriched place data dictionary.
     """
     print(f"DEBUG: Enriching data for {place_data.get('name')}")
     return place_data

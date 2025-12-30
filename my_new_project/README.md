@@ -17,6 +17,16 @@ python manage.py runserver
 
 Backend runs at: `http://127.0.0.1:8000/`
 
+### Running Tests
+
+To run the test suite (including API performance tests):
+
+```powershell
+python manage.py test res_backend
+```
+
+Note: The test environment automatically mocks Firebase credentials if they are missing, allowing you to run tests without a live Firebase connection.
+
 ---
 
 ## 📡 API Endpoints

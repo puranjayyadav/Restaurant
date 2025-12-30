@@ -85,7 +85,9 @@ if not firebase_admin._apps:
                 cred = credentials.Certificate(alt_path)
                 print(f"DEBUG: Initialized Firebase using alternative path: {alt_path}")
             else:
-                # Bypass for testing if not found
+                # Bypass for testing if not found.
+                # In CI/CD or local test environments where credentials aren't present,
+                # we skip the strict check to allow the app to load for unit tests.
                 print(f"WARNING: FIREBASE_CREDENTIALS not found. Mocking for test environment.")
                 cred = None
     
@@ -95,10 +97,13 @@ if not firebase_admin._apps:
             print("DEBUG: Firebase app initialized successfully")
         except Exception as init_error:
             print(f"ERROR: Failed to initialize Firebase app: {str(init_error)}")
-            # Don't raise if we want to allow partial functionality
+            # Don't raise if we want to allow partial functionality, e.g. for testing views
+            # that don't strictly require Firebase immediately.
             pass
 
 # Get a Firestore client (mock if needed)
+# Using a try-except block allows the application to start even if Firebase
+# connection fails, which is critical for running offline tests.
 try:
     db = firestore.client()
 except Exception:

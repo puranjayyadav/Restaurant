@@ -15,7 +15,7 @@ SUPABASE_KEY = config("SUPABASE_KEY", default=os.getenv("SUPABASE_KEY"))
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
-    print("⚠️  Warning: Supabase credentials not found. Data will only be saved to JSON files.")
+    print("Warning: Supabase credentials not found. Data will only be saved to JSON files.")
     supabase = None
 
 
@@ -39,7 +39,7 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
         return False
     
     if not results:
-        print("      [ℹ️] No results to save")
+        print("      [INFO] No results to save")
         return True
     
     # Prepare data for 'venues' table
@@ -95,11 +95,63 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
             on_conflict="place_id,vibe_slug"
         ).execute()
         
-        print(f"      [✅] Saved {len(results)} venues to Supabase")
+        print(f"      [SUCCESS] Saved {len(results)} venues to Supabase")
         return True
         
     except Exception as e:
-        print(f"      [❌] Supabase Error: {e}")
+        print(f"      [ERROR] Supabase Error: {e}")
+        return False
+
+
+def save_hidden_gems_batch(results: List[Dict[str, Any]], vibe_slug: str, vibe_group: str, neighborhood: str, region: str) -> bool:
+    """
+    Saves scraped results specifically to the 'hidden_gems' table.
+    """
+    if not supabase:
+        return False
+    
+    if not results:
+        return True
+    
+    gems_data = []
+    
+    for r in results:
+        p_id = r.get('place_id')
+        if not p_id:
+            p_id = f"{r.get('name', 'unknown')}_{r.get('full_address', 'unknown')}".replace(' ', '_')
+        
+        gems_data.append({
+            "place_id": p_id,
+            "name": r.get('name'),
+            "address": r.get('full_address'),
+            "street_address": r.get('street_address'),
+            "city": r.get('city'),
+            "state": r.get('state'),
+            "zip": r.get('zip'),
+            "latitude": r.get('lat'),
+            "longitude": r.get('long'),
+            "rating": r.get('avg_rating'),
+            "review_count": r.get('total_reviews'),
+            "phone": r.get('phone'),
+            "website": r.get('website'),
+            "hours": r.get('hours'),
+            "photos": r.get('photos'),
+            "vibe_slug": vibe_slug,
+            "vibe_group": vibe_group,
+            "neighborhood": neighborhood,
+            "region": region
+        })
+    
+    try:
+        supabase.table("hidden_gems_v2").upsert(
+            gems_data,
+            on_conflict="place_id,vibe_slug,neighborhood"
+        ).execute()
+        
+        print(f"      [SUPABASE] Synced {len(results)} gems to 'hidden_gems_v2' table")
+        return True
+    except Exception as e:
+        print(f"      [SUPABASE ERROR] {e}")
         return False
 
 
@@ -171,7 +223,7 @@ if __name__ == "__main__":
     
     # Test connection
     if supabase:
-        print("✅ Supabase connection successful!")
+        print("Supabase connection successful!")
         print(f"   URL: {SUPABASE_URL}")
     else:
-        print("❌ Supabase credentials not configured")
+        print("Supabase credentials not configured")

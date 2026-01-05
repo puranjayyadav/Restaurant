@@ -1,3 +1,7 @@
-requests==2.31.0
-supabase==2.3.0
-python-decouple==3.8
+# Core dependencies for Google Maps Scraper
+requests>=2.31.0
+supabase>=2.3.0
+python-decouple>=3.8
+
+# These are typically included but adding for explicit compatibility
+urllib3>=2.0.0

@@ -5,7 +5,7 @@ import '../../theme/plandit_design_system.dart';
 import 'storyboard_models.dart';
 
 class BookingOptionsSheet extends StatelessWidget {
-  final Venue venue;
+  final VenueVariant venue;
 
   const BookingOptionsSheet({
     super.key,
@@ -262,7 +262,7 @@ class BookingOptionsSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildCallOption(BuildContext context, Venue venue) {
+  Widget _buildCallOption(BuildContext context, VenueVariant venue) {
     return Material(
       color: Colors.transparent,
       child: InkWell(

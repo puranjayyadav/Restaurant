@@ -69,7 +69,10 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
             "phone": r.get('phone'),
             "website": r.get('website'),
             "hours": r.get('hours'),  # JSON field
-            "photos": r.get('photos')  # JSON field
+            "photos": r.get('photos'),  # JSON field
+            "opentable_url": r.get('opentable_url'),
+            "resy_url": r.get('resy_url'),
+            "accepts_reservations": r.get('accepts_reservations', False)
         })
         
         # Prepare vibe association data

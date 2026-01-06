@@ -222,8 +222,32 @@ def build_results(prepared_data: List[Any]) -> List[Dict[str, Any]]:
             'lat': coords['lat'],
             'long': coords['long'],
             'hours': get_hours(lookup),
-            'photos': photo_objects
+            'photos': photo_objects,
+            'opentable_url': None,
+            'resy_url': None,
+            'accepts_reservations': False
         })
+        
+        # Generate booking links
+        city_val = lookup(183, 1, 3) or 'New York'
+        if website:
+            if 'opentable.com' in website:
+                results[-1]['opentable_url'] = website
+                results[-1]['accepts_reservations'] = True
+            if 'resy.com' in website:
+                results[-1]['resy_url'] = website
+                results[-1]['accepts_reservations'] = True
+                
+        # Fallback generation (Always provide search link if we have name)
+        if not results[-1]['opentable_url']:
+             results[-1]['opentable_url'] = f"https://www.opentable.com/s/?covers=2&dateTime=2026-02-14+19%3A00&term={urllib.parse.quote(name)}&metroId=8" # MetroId 8 = NYC
+        
+        if not results[-1]['resy_url']:
+             city_slug = city_val.lower().replace(' ', '-') if city_val else 'ny'
+             results[-1]['resy_url'] = f"https://resy.com/cities/{urllib.parse.quote(city_slug)}?query={urllib.parse.quote(name)}"
+             
+        # Enable reservation button if we have links (we always do now with search fallback)
+        results[-1]['accepts_reservations'] = True
     return results
 
 

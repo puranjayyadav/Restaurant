@@ -2841,6 +2841,38 @@ class ApiService {
     }
   }
 
+  /// Save a complete itinerary to Supabase
+  Future<void> saveItinerary(Map<String, dynamic> itineraryData) async {
+    try {
+      if (supabaseAnonKey.isEmpty) {
+        throw Exception('Supabase key not configured');
+      }
+
+      final uri = Uri.parse('$supabaseUrl/itineraries');
+      
+      final resp = await http.post(
+        uri,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'Authorization': 'Bearer $supabaseAnonKey',
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: json.encode(itineraryData),
+      );
+
+      if (resp.statusCode >= 200 && resp.statusCode < 300) {
+        print('DEBUG: Itinerary saved successfully');
+        return;
+      } else {
+        throw Exception('Failed to save itinerary: ${resp.statusCode} - ${resp.body}');
+      }
+    } catch (e) {
+      print('ERROR: Exception saving itinerary: $e');
+      rethrow;
+    }
+  }
+
   /// Submit an itinerary to the public feed
   Future<Map<String, dynamic>?> submitPublicItinerary({
     required String userId,

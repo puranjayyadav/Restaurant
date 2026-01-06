@@ -64,6 +64,10 @@ class VenueVariant {
     if (price == null || price.isEmpty) return '\$\$';
     return price;
   }
+  
+  // Getters for compatibility with BookingOptionsSheet
+  String get name => venue;
+  String? get phone => null; // Phone number not currently stored in VenueVariant
 }
 
 class Chapter {

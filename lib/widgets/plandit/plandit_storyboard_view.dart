@@ -383,26 +383,30 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
         'user_id': user.uid,
         'title': widget.query,
         'query': widget.query,
-        'chapters': chapters.map((chapter) => {
-          'time': chapter.time,
-          'venue': {
-            'name': chapter.venue.name,
-            'category': chapter.venue.category,
-            'lat': chapter.venue.lat,
-            'lng': chapter.venue.lng,
-            'reason': chapter.venue.reason,
-            'rating': chapter.venue.rating,
-            'priceRange': chapter.venue.priceRange,
-            'coordinates': chapter.venue.coordinates,
-            'placeId': chapter.venue.placeId,
-            'isLemon8': chapter.venue.isLemon8,
-          },
-        }).toList(),
+        'chapters': chapters.map((chapter) {
+          // Get the first variant (default) for each chapter
+          final variant = chapter.variants.values.firstOrNull;
+          if (variant == null) return null;
+          
+          return {
+            'time': chapter.time,
+            'venue': {
+              'name': variant.venue,
+              'category': variant.venueType,
+              'lat': variant.lat,
+              'lng': variant.lng,
+              'reason': variant.description,
+              'rating': variant.rating,
+              'priceRange': variant.price,
+              'placeId': variant.placeId,
+            },
+          };
+        }).whereType<Map<String, dynamic>>().toList(),
         'created_at': DateTime.now().toIso8601String(),
       };
 
       // Save to API
-      await _apiService.submitPublicItinerary(itineraryToSave);
+      await _apiService.saveItinerary(itineraryToSave);
 
       if (mounted) Navigator.of(context).pop(); // Close loading dialog
 

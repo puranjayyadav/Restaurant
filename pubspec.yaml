@@ -81,6 +81,8 @@ flutter:
   assets:
     - assets/logo.png
     - assets/plandit_logo.png
+    - assets/opentable_icon.png
+    - assets/resy_icon.png
 
   fonts:
     - family: SF Pro Display

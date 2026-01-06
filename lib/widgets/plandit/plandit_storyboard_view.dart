@@ -10,6 +10,7 @@ import 'vibe_tuner.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'storyboard_models.dart';
 import 'itinerary_map_view.dart';
+import 'booking_options_sheet.dart';
 
 class PlanditStoryboardView extends StatefulWidget {
   final String query;
@@ -351,6 +352,106 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
     }
   }
 
+  Future<void> _saveItinerary() async {
+    try {
+      // Get current user
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please sign in to save itineraries'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(PlanditColors.accent),
+          ),
+        ),
+      );
+
+      // Prepare itinerary data
+      final itineraryToSave = {
+        'user_id': user.uid,
+        'title': widget.query,
+        'query': widget.query,
+        'chapters': chapters.map((chapter) => {
+          'time': chapter.time,
+          'venue': {
+            'name': chapter.venue.name,
+            'category': chapter.venue.category,
+            'lat': chapter.venue.lat,
+            'lng': chapter.venue.lng,
+            'reason': chapter.venue.reason,
+            'rating': chapter.venue.rating,
+            'priceRange': chapter.venue.priceRange,
+            'coordinates': chapter.venue.coordinates,
+            'placeId': chapter.venue.placeId,
+            'isLemon8': chapter.venue.isLemon8,
+          },
+        }).toList(),
+        'created_at': DateTime.now().toIso8601String(),
+      };
+
+      // Save to API
+      await _apiService.submitPublicItinerary(itineraryToSave);
+
+      if (mounted) Navigator.of(context).pop(); // Close loading dialog
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 12),
+                Text(
+                  'Itinerary saved successfully!',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop(); // Close loading dialog
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showBookingOptions(VenueVariant venue) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => BookingOptionsSheet(venue: venue),
+    );
+  }
+
   Future<void> _loadUserPreferences() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -562,9 +663,45 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
                                 ),
                               ],
                             ),
-                            GestureDetector(
-                              onTap: widget.onClose,
-                              child: const Icon(Icons.close, color: PlanditColors.primaryText),
+                            Row(
+                              children: [
+                                // Save Button
+                                GestureDetector(
+                                  onTap: _saveItinerary,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: PlanditColors.accent,
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.bookmark_border,
+                                          color: Colors.white,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Save',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // Close Button
+                                GestureDetector(
+                                  onTap: widget.onClose,
+                                  child: const Icon(Icons.close, color: PlanditColors.primaryText),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -1014,6 +1151,40 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
                       ),
                     ),
                   ),
+                
+                // Booking Button
+                if (venue.acceptsReservations)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: InkWell(
+                      onTap: () => _showBookingOptions(venue),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: PlanditColors.accent,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.restaurant_menu, size: 16, color: Colors.white),
+                            const SizedBox(width: 8),
+                            Text(
+                              "MAKE RESERVATION",
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                
                 // Tags
                 if (venue.insiderProfile != null && venue.insiderProfile!['vibe_tags'] != null)
                   Wrap(

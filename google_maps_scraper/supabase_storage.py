@@ -181,6 +181,11 @@ CREATE TABLE IF NOT EXISTS venues (
   website TEXT,
   hours JSONB,
   photos JSONB,
+  opentable_url TEXT,
+  resy_url TEXT,
+  accepts_reservations BOOLEAN DEFAULT FALSE,
+  booking_platforms TEXT[],
+  last_booking_check TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

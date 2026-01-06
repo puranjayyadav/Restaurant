@@ -11,6 +11,9 @@ class VenueVariant {
   final double? lat;
   final double? lng;
   final Map<String, dynamic>? insiderProfile;
+  final String? opentableUrl;
+  final String? resyUrl;
+  final bool acceptsReservations;
 
   VenueVariant({
     this.placeId,
@@ -23,6 +26,9 @@ class VenueVariant {
     this.lat,
     this.lng,
     this.insiderProfile,
+    this.opentableUrl,
+    this.resyUrl,
+    this.acceptsReservations = false,
   });
 
   factory VenueVariant.fromJson(Map<String, dynamic> json) {
@@ -48,6 +54,9 @@ class VenueVariant {
       lat: latitude,
       lng: longitude,
       insiderProfile: json['insider_profile'] as Map<String, dynamic>?,
+      opentableUrl: json['opentable_url']?.toString(),
+      resyUrl: json['resy_url']?.toString(),
+      acceptsReservations: json['accepts_reservations'] == true,
     );
   }
 

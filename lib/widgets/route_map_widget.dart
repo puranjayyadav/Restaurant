@@ -189,9 +189,8 @@ class _RouteMapWidgetState extends State<RouteMapWidget> {
             children: [
               // Map tiles
               TileLayer(
-                urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-                subdomains: const ['a', 'b', 'c', 'd'],
-                userAgentPackageName: 'com.plandit.app',
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.restaurant_tracker',
               ),
               
               // Route polyline

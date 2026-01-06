@@ -29,6 +29,14 @@ class VenueVariant {
     // Extract coordinates from the API response
     final coords = json['coordinates'] as Map<String, dynamic>?;
     
+    // Support multiple coordinate formats
+    double? latitude = coords != null ? (coords['lat'] as num?)?.toDouble() : (json['latitude'] as num?)?.toDouble();
+    double? longitude = coords != null ? (coords['lng'] as num?)?.toDouble() : (json['longitude'] as num?)?.toDouble();
+
+    // Fallback for some scrapers that use 'lat'/'lng' at top level
+    latitude ??= (json['lat'] as num?)?.toDouble();
+    longitude ??= (json['lng'] as num?)?.toDouble();
+    
     return VenueVariant(
       placeId: json['place_id']?.toString(),
       venue: json['name'] ?? 'Unknown Venue',
@@ -37,8 +45,8 @@ class VenueVariant {
       aiNote: json['reason'] ?? 'Selected for your journey',
       rating: (json['rating'] ?? 4.5).toDouble(),
       price: _formatPrice(json['price_range'] ?? '\$\$'),
-      lat: coords != null ? (coords['lat'] as num?)?.toDouble() : null,
-      lng: coords != null ? (coords['lng'] as num?)?.toDouble() : null,
+      lat: latitude,
+      lng: longitude,
       insiderProfile: json['insider_profile'] as Map<String, dynamic>?,
     );
   }

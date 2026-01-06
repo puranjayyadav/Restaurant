@@ -164,6 +164,7 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
       }
     }
     
+    print('DEBUG: ItineraryMapView found ${points.length} venue points');
     return points;
   }
 
@@ -223,10 +224,10 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', // light style for white washed look
-                subdomains: const ['a', 'b', 'c'],
+                urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c', 'd'],
                 userAgentPackageName: 'com.example.restaurant_tracker',
-                retinaMode: RetinaMode.isHighDensity(context), // Fix: it's a function
+                retinaMode: RetinaMode.isHighDensity(context),
               ),
               if (!_isLoadingRoute && _routePoints.length > 1)
                 PolylineLayer(
@@ -345,7 +346,7 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
                 children: [
                   Text(
                     'Your Journey',
-                    style: GoogleFonts.playfairDisplay(
+                    style: GoogleFonts.inter(
                       fontSize: 32,
                       fontWeight: FontWeight.w600,
                       color: Colors.white,
@@ -355,7 +356,7 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
                   const SizedBox(height: 4),
                   Text(
                     '${widget.chapters.length} carefully curated stops',
-                    style: TextStyle(
+                    style: GoogleFonts.inter(
                       fontSize: 14,
                       color: Colors.white.withOpacity(0.6),
                       letterSpacing: 0.5,
@@ -378,13 +379,6 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
                 color: Colors.white.withOpacity(0.1),
                 width: 1,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
             ),
             child: Stack(
               children: [
@@ -402,10 +396,10 @@ class _ItineraryMapViewState extends State<ItineraryMapView>
                     ),
                   ),
                   children: [
-                    // Light map tiles
+                    // Light map tiles (CartoDB Positron)
                     TileLayer(
-                      urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-                      subdomains: const ['a', 'b', 'c'],
+                      urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
                       userAgentPackageName: 'com.example.restaurant_tracker',
                       retinaMode: RetinaMode.isHighDensity(context),
                     ),

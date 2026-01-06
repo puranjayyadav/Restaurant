@@ -8,6 +8,90 @@ import 'dart:math';
 import 'dart:async';
 
 class ApiService {
+  final String googleApiKey = 'AIzaSyCqeTKWDSpdukY0rG3_0jipiGY1W5UU_28';
+
+  Future<Map<String, dynamic>?> fetchPlaceDetails(String placeId) async {
+    try {
+      final url = Uri.parse(
+          'https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&fields=geometry&key=$googleApiKey');
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'OK') {
+          return data['result'] as Map<String, dynamic>;
+        }
+      }
+      return null;
+    } catch (e) {
+      print('Error fetching place details: $e');
+      return null;
+    }
+  }
+
+  /// Fetch address suggestions from OpenStreetMap (via Photon API).
+  Future<List<Map<String, dynamic>>> getAddressSuggestions(String query) async {
+    if (query.isEmpty || query.length < 2) return [];
+
+    final url = Uri.parse(
+        'https://photon.komoot.io/api/?q=${Uri.encodeComponent(query)}&limit=15'); // Increase limit to allow for filtering
+
+    try {
+      final response = await http.get(url, headers: {
+        'User-Agent': 'Plandit/1.0',
+        'Accept': 'application/json',
+      });
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final List<Map<String, dynamic>> suggestions = [];
+
+        final features = data['features'] as List? ?? [];
+        for (var feature in features) {
+          final props = feature['properties'] as Map? ?? {};
+          
+          // Filter for US only
+          final cCode = props['countrycode']?.toString().toUpperCase();
+          final cName = props['country']?.toString().toLowerCase();
+          
+          if (cCode != 'US' && cName != 'united states' && cName != 'usa') {
+            continue;
+          }
+
+          final geometry = feature['geometry'] as Map? ?? {};
+          final coords = geometry['coordinates'] as List? ?? [0.0, 0.0];
+
+          final name = props['name'];
+          final city = props['city'];
+          final state = props['state'];
+          final countryVal = props['country'];
+
+          // Build a clean display string
+          final parts = <String>[];
+          if (name != null) parts.add(name.toString());
+          if (city != null && city != name) parts.add(city.toString());
+          if (state != null) parts.add(state.toString());
+          if (countryVal != null) parts.add(countryVal.toString());
+
+          final displayString = parts.join(", ");
+          if (displayString.isNotEmpty) {
+            suggestions.add({
+              'display': displayString,
+              'lat': coords.length > 1 ? (coords[1] as num).toDouble() : 0.0,
+              'lng': coords.length > 0 ? (coords[0] as num).toDouble() : 0.0,
+            });
+          }
+        }
+        // Deduplicate
+        final seen = <String>{};
+        return suggestions.where((s) => seen.add(s['display'])).toList();
+      }
+    } catch (e) {
+      print("ERROR: Failed to fetch OSM address suggestions for '$query': $e");
+    }
+
+    return [];
+  }
+
   // Supabase REST (for cloneable adventures)
   static const String supabaseUrl =
       'https://diytyziczzosylmyrfxo.supabase.co/rest/v1';
@@ -143,86 +227,152 @@ class ApiService {
   }
 
   /// Fetch Instagram-worthy places from lemon8_articles guide table
-  Future<List<Map<String, dynamic>>> getInstagramWorthyPlaces({String? city, int limit = 2}) async {
+  /// Get Instagram-worthy places near a location
+  /// Filters for cafes, restaurants, and shops - excludes generic types like parks
+  Future<List<Map<String, dynamic>>> getInstagramWorthyPlaces({
+    double? lat,
+    double? lng,
+    int radiusMeters = 3000,
+    int limit = 2,
+    String? city,
+  }) async {
     try {
-      if (supabaseAnonKey.isEmpty) return [];
+      if (supabaseAnonKey.isEmpty) {
+        print('DEBUG: Supabase key is empty, cannot fetch Instagram spots');
+        return [];
+      }
 
-      // Query lemon8_articles for valid itineraries
-      // filter by city if provided using jsonb operator
-      String cityFilter = city != null ? '&itinerary_data->>city=eq.${Uri.encodeComponent(city)}' : '';
-      
+      // Convert radius to km for distance calculation
+      final radiusKm = radiusMeters / 1000.0;
+
+      // Query lemon8_articles table for Instagram-worthy spots
       final uri = Uri.parse(
-          '$supabaseUrl/lemon8_articles?select=itinerary_data,stops_lat,stops_lng&itinerary_data=not.is.null&stops_lat=not.is.null$cityFilter&limit=10');
+          '$supabaseUrl/lemon8_articles?select=*&limit=50'); // Get more to filter
 
-      final client = http.Client();
-      try {
-        final resp = await client.get(uri, headers: {
-          'apikey': supabaseAnonKey,
-          'Authorization': 'Bearer $supabaseAnonKey',
-          'Content-Type': 'application/json',
-        }).timeout(const Duration(seconds: 15));
+      print('DEBUG: Fetching Instagram spots from: $uri');
+      if (lat != null && lng != null) {
+        print('DEBUG: Center: ($lat, $lng), Radius: ${radiusKm}km');
+      }
 
-        if (resp.statusCode == 200) {
-          final List<dynamic> articles = json.decode(utf8.decode(resp.bodyBytes));
-          final List<Map<String, dynamic>> results = [];
+      final resp = await http.get(uri, headers: {
+        'apikey': supabaseAnonKey,
+        'Authorization': 'Bearer $supabaseAnonKey',
+        'Content-Type': 'application/json',
+      }).timeout(const Duration(seconds: 15));
 
-          for (var article in articles) {
-            final rawItineraryData = article['itinerary_data'];
-            final stopsLat = article['stops_lat'] as List<dynamic>?;
-            final stopsLng = article['stops_lng'] as List<dynamic>?;
-            
-            if (rawItineraryData == null || stopsLat == null || stopsLng == null) continue;
-            
-            List<dynamic> stops = [];
-            String cityVal = 'discovery';
-            
-            if (rawItineraryData is Map) {
-              stops = rawItineraryData['stops'] as List<dynamic>? ?? [];
-              cityVal = rawItineraryData['city']?.toString() ?? 'discovery';
-            } else if (rawItineraryData is List) {
-              stops = rawItineraryData;
-            }
+      if (resp.statusCode != 200) {
+        print('ERROR: Failed to fetch Instagram spots: ${resp.statusCode}');
+        print('ERROR: Response body: ${resp.body}');
+        return [];
+      }
 
-            if (stops.isEmpty) continue;
+      final data = json.decode(utf8.decode(resp.bodyBytes));
+      if (data is! List) {
+        print('ERROR: Response is not a list, got: ${data.runtimeType}');
+        return [];
+      }
 
-            for (int i = 0; i < stops.length && i < stopsLat.length && i < stopsLng.length; i++) {
-              final stopRaw = stops[i];
-              final latVal = stopsLat[i];
-              final lngVal = stopsLng[i];
-              
-              if (stopRaw is! Map || latVal == null || lngVal == null) continue;
-              
-              final stop = Map<String, dynamic>.from(stopRaw);
-              results.add({
-                'name': stop['place_name'] ?? 'Instagram Spot',
-                'category': stop['category'] ?? 'Lifestyle',
-                'reason': stop['notes'] ?? 'A highly aesthetic, Instagram-worthy discovery.',
-                'rating': 4.8 + (Random().nextDouble() * 0.2), // High ratings for aesthetic spots
-                'price_range': '\$\$\$',
-                'coordinates': {
-                  'lat': (latVal as num).toDouble(),
-                  'lng': (lngVal as num).toDouble(),
-                },
-                'place_id': 'lemon8_${cityVal}_${Random().nextInt(10000)}',
-                'is_lemon8': true,
-              });
+      print('DEBUG: Fetched ${data.length} total lemon8_articles');
+
+      final results = <Map<String, dynamic>>[];
+      int skippedNoData = 0;
+      int skippedNoCoords = 0;
+      int skippedDistance = 0;
+      int skippedCategory = 0;
+      
+      // Filter and process results - lemon8_articles has nested structure
+      for (var article in data) {
+        if (article is! Map) continue;
+        
+        // Get itinerary data and coordinate arrays
+        final itineraryData = article['itinerary_data'];
+        final stopsLat = article['stops_lat'] as List<dynamic>?;
+        final stopsLng = article['stops_lng'] as List<dynamic>?;
+        
+        if (itineraryData == null || stopsLat == null || stopsLng == null) {
+          skippedNoData++;
+          continue;
+        }
+        
+        // Parse stops from itinerary_data
+        List<dynamic> stops = [];
+        if (itineraryData is Map) {
+          stops = itineraryData['stops'] as List<dynamic>? ?? [];
+        } else if (itineraryData is List) {
+          stops = itineraryData;
+        }
+        
+        if (stops.isEmpty) {
+          skippedNoData++;
+          continue;
+        }
+        
+        // Process each stop with its coordinates
+        for (int i = 0; i < stops.length && i < stopsLat.length && i < stopsLng.length; i++) {
+          final stop = stops[i];
+          if (stop is! Map) continue;
+          
+          final placeLat = _safeDouble(stopsLat[i], 0.0);
+          final placeLng = _safeDouble(stopsLng[i], 0.0);
+          
+          if (placeLat == 0.0 || placeLng == 0.0) {
+            skippedNoCoords++;
+            continue;
+          }
+          
+          // Calculate distance if location provided
+          double distance = 0.0;
+          if (lat != null && lng != null) {
+            distance = _calculateDistance(lat, lng, placeLat, placeLng);
+            if (distance > radiusKm) {
+              skippedDistance++;
+              continue;
             }
           }
           
-          if (results.isEmpty && city != null) {
-            // If no results for city, retry without city filter
-            return getInstagramWorthyPlaces(limit: limit);
+          // Filter by category - exclude generic types
+          final category = (stop['category'] ?? '').toString().toLowerCase();
+          final excludedTypes = ['park', 'state', 'city', 'neighborhood'];
+          
+          // Skip if it's a generic type
+          if (excludedTypes.any((type) => category.contains(type))) {
+            skippedCategory++;
+            continue;
           }
-
-          results.shuffle();
-          return results.take(limit).toList();
+          
+          // Format as itinerary-compatible item
+          results.add({
+            'name': stop['place_name'] ?? stop['name'] ?? 'Instagram Spot',
+            'lat': placeLat,
+            'lng': placeLng,
+            'category': stop['category'] ?? 'Cafe',
+            'description': stop['notes'] ?? stop['description'] ?? 'A highly aesthetic, Instagram-worthy discovery.',
+            'image_url': stop['image_url'],
+            'lemon8_url': article['url'],
+            'is_lemon8': true,
+            'distance_km': distance,
+          });
         }
-        return [];
-      } finally {
-        client.close();
       }
+      
+      print('DEBUG: Filtered results - Total: ${results.length}, Skipped (no data: $skippedNoData, no coords: $skippedNoCoords, distance: $skippedDistance, category: $skippedCategory)');
+      
+      // Sort by distance if location provided, otherwise shuffle
+      if (lat != null && lng != null) {
+        results.sort((a, b) => (a['distance_km'] as double).compareTo(b['distance_km'] as double));
+      } else {
+        results.shuffle();
+      }
+      
+      final filtered = results.take(limit).toList();
+      print('DEBUG: Returning ${filtered.length} Instagram-worthy places');
+      if (filtered.isNotEmpty) {
+        print('DEBUG: First place: ${filtered[0]['name']} at ${filtered[0]['distance_km']}km');
+      }
+      
+      return filtered;
     } catch (e) {
-      print('ERROR: Exception getting Instagram worthy places: $e');
+      print('ERROR: Exception in getInstagramWorthyPlaces: $e');
       return [];
     }
   }
@@ -3066,29 +3216,6 @@ class ApiService {
     return (bearingDegrees + 360) % 360;
   }
 
-  /// Get address suggestions for autocomplete.
-  Future<List<String>> getAddressSuggestions(String query) async {
-    try {
-      if (query.length < 2) return [];
-      
-      final url = Uri.parse('$baseUrl/api/address-suggestions/')
-          .replace(queryParameters: {'q': query});
-      
-      final response = await http.get(url).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw TimeoutException('Suggestions timeout'),
-      );
-
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        return data.map((e) => e.toString()).toList();
-      }
-      return [];
-    } catch (e) {
-      print('ERROR: Exception getting address suggestions: $e');
-      return [];
-    }
-  }
 
   // ============================================
   // PLANDIT REAL-TIME ITINERARY GENERATION

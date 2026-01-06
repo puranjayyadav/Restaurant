@@ -72,9 +72,6 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
     );
 
     _loadUserPreferences();
-    if (widget.itineraryData != null) {
-      _fetchInitialInstagramPlaces();
-    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       setState(() => isVisible = true);
@@ -327,28 +324,6 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
           ),
         );
       }
-    }
-  }
-
-  Future<void> _fetchInitialInstagramPlaces() async {
-    try {
-      final instagramPlaces = await _apiService.getInstagramWorthyPlaces(limit: 2);
-      if (instagramPlaces.isNotEmpty && mounted) {
-        if (widget.itineraryData != null) {
-          final enrichedData = Map<String, dynamic>.from(widget.itineraryData!);
-          final itineraryList = List<Map<String, dynamic>>.from(enrichedData['itinerary'] ?? []);
-          itineraryList.addAll(instagramPlaces);
-          enrichedData['itinerary'] = itineraryList;
-          
-          final newChapters = _parseApiChapters(enrichedData);
-          setState(() {
-            chapters = newChapters;
-            chapterKeys = List.generate(newChapters.length, (_) => GlobalKey());
-          });
-        }
-      }
-    } catch (e) {
-      print('DEBUG: Error fetching initial Instagram places: $e');
     }
   }
 
@@ -676,9 +651,9 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
                                             begin: Alignment.topCenter,
                                             end: Alignment.bottomCenter,
                                             colors: [
-                                              Colors.white.withOpacity(0.7),
-                                              Colors.white.withOpacity(0.5),
+                                              Colors.white.withOpacity(0.4),
                                               Colors.white.withOpacity(0.3),
+                                              Colors.white.withOpacity(0.2),
                                               Colors.transparent,
                                             ],
                                             stops: const [0.0, 0.3, 0.7, 1.0],

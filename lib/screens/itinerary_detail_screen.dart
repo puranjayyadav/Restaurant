@@ -110,7 +110,10 @@ class ItineraryDetailScreen extends StatelessWidget {
   double _estimatedHours() => (_stops.length * 1.5).clamp(1, 12).toDouble();
 
   double _estimatedDistanceMiles() {
-    final totalKm = (_routeStats['total_distance_km'] as num?)?.toDouble();
+    final rawTotalKm = _routeStats['total_distance_km'];
+    final totalKm = (rawTotalKm is num)
+        ? rawTotalKm.toDouble()
+        : double.tryParse(rawTotalKm?.toString() ?? '');
     if (totalKm != null) return (totalKm * 0.621371);
     // fallback: 0.6 miles per gap
     return ((_stops.length - 1) * 0.6).clamp(0, 25).toDouble();
@@ -149,23 +152,56 @@ class ItineraryDetailScreen extends StatelessWidget {
 
   String _categoryForStop(Map<String, dynamic> stop) {
     final postgresData = stop['postgres_data'];
+    
+    // Priority 1: category_normalized from postgres_data (most accurate)
+    if (postgresData is Map) {
+      final categoryNormalized = postgresData['category_normalized'];
+      if (categoryNormalized is String && categoryNormalized.trim().isNotEmpty && categoryNormalized.toLowerCase() != 'general') {
+        return categoryNormalized;
+      }
+      
+      // Priority 2: category from postgres_data
+      final category = postgresData['category'];
+      if (category is String && category.trim().isNotEmpty && category.toLowerCase() != 'general') {
+        return category;
+      }
+    }
+    
+    // Priority 3: Direct category field from stop
+    final stopCategory = stop['category'];
+    if (stopCategory is String && stopCategory.trim().isNotEmpty && stopCategory.toLowerCase() != 'general') {
+      return stopCategory;
+    }
+    
+    // Priority 4: Extract from types array (clean up underscores and make readable)
     final postgresTypes = postgresData is Map ? postgresData['types'] : null;
+    if (postgresTypes is List && postgresTypes.isNotEmpty) {
+      final firstType = postgresTypes.first.toString();
+      // Clean up common type formats
+      final cleaned = firstType
+          .replaceAll('_', ' ')
+          .replaceAll('restaurant', '')
+          .replaceAll('establishment', '')
+          .trim();
+      if (cleaned.isNotEmpty) {
+        return cleaned;
+      }
+    }
+    
+    // Priority 5: Other stop fields
     final candidates = [
-      stop['category'],
       stop['vibe'],
       stop['type'],
       stop['tag'],
-      postgresTypes is List && postgresTypes.isNotEmpty
-          ? postgresTypes.first
-          : null,
-      _vibeTag(),
     ];
+    
     for (final candidate in candidates) {
-      if (candidate is String && candidate.trim().isNotEmpty) {
+      if (candidate is String && candidate.trim().isNotEmpty && candidate.toLowerCase() != 'explore' && candidate.toLowerCase() != 'general') {
         return candidate;
       }
     }
-    return 'Stop';
+    
+    return 'Place';
   }
 
   String _noteForStop(Map<String, dynamic> stop) {
@@ -569,30 +605,37 @@ class ItineraryDetailScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      category,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[600],
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          style: GoogleFonts.playfairDisplay(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF1A1A1A),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    title,
-                    style: GoogleFonts.playfairDisplay(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF1A1A1A),
-                    ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A1A1A),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          category.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   Container(

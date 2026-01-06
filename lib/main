@@ -1,0 +1,548 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'api_service.dart';
+import 'firebase_service.dart';
+import 'package:geocoding/geocoding.dart'; // For reverse geocoding
+import 'map_screen.dart';
+import 'logout_button.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
+// Alias the location package to avoid conflicts.
+import 'package:location/location.dart' as loc;
+import 'google_signin_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'trips_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(FoodExplorerApp());
+}
+
+class FoodExplorerApp extends StatelessWidget {
+  const FoodExplorerApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Food Explorer',
+      theme: ThemeData(
+        primarySwatch: Colors.deepOrange,
+      ),
+      home: GoogleSignInScreen(),
+    );
+  }
+}
+
+/// Landing screen with a message and two big buttons: Scout Mode and Rendezvous Mode.
+class ModeSelectionScreen extends StatelessWidget {
+  const ModeSelectionScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Display the message at the top.
+              Text(
+                "Saw an amazing cafe walking by? Don't worry, press Scout Mode to record that gem!",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+              ),
+              SizedBox(height: 40),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  padding: EdgeInsets.symmetric(horizontal: 50, vertical: 20),
+                  textStyle: TextStyle(fontSize: 24),
+                ),
+                child: Text('Scout Mode'),
+                onPressed: () {
+                  print("Scout Mode button pressed");
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => HomePage()),
+                  );
+                },
+              ),
+              SizedBox(height: 40),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  padding: EdgeInsets.symmetric(horizontal: 50, vertical: 20),
+                  textStyle: TextStyle(fontSize: 24),
+                ),
+                child: Text('Rendezvous Mode'),
+                onPressed: () {
+                  print("Rendezvous Mode button pressed");
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => RendezvousScreen()),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// HomePage represents the Scout Mode functionality.
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final ApiService apiService = ApiService();
+  final FirebaseService firebaseService = FirebaseService();
+  List<dynamic> restaurants = [];
+  List<dynamic> cafes = [];
+  List<dynamic> desserts = [];
+  loc.LocationData? currentLocation;
+  String? fullAddress; // Human-friendly address.
+  bool isLoading = true;
+  String? firebaseSessionId; // Firebase session ID.
+  String? djangoSessionId; // Django session ID.
+  Timer? periodicTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeScoutMode();
+    // Set up periodic location update every 5 minutes.
+    periodicTimer = Timer.periodic(Duration(minutes: 5), (timer) async {
+      print("Periodic update triggered");
+      await _updateLocationWithoutMap();
+    });
+  }
+
+  /// Logout function to sign out from Firebase and navigate to GoogleSignInScreen.
+  Future<void> _logout() async {
+    await FirebaseAuth.instance.signOut();
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => GoogleSignInScreen()),
+      (route) => false,
+    );
+  }
+
+  /// Stop Scout Mode and navigate back to the landing screen.
+  Future<void> _stopScoutMode() async {
+    periodicTimer?.cancel();
+    Navigator.pop(context);
+  }
+
+  /// Initialize Scout Mode:
+  /// 1. Create sessions in Firebase and Django.
+  /// 2. Fetch the user's current location.
+  /// 3. Reverse geocode the location.
+  /// 4. Fetch nearby establishments and save them.
+  Future<void> _initializeScoutMode() async {
+    print("Initializing Scout Mode...");
+    try {
+      firebaseSessionId = await firebaseService.createSession();
+      print("Firebase session created: $firebaseSessionId");
+    } catch (e) {
+      print("Error creating Firebase session: $e");
+    }
+    try {
+      djangoSessionId = await apiService.createSessionDjango("anonymous");
+      print("Django session created: $djangoSessionId");
+    } catch (e) {
+      print("Error creating session in Django: $e");
+    }
+
+    currentLocation = await loc.Location().getLocation();
+    if (currentLocation == null) {
+      print("Error: Unable to fetch current location.");
+      setState(() {
+        isLoading = false;
+      });
+      return;
+    }
+    print(
+        "Current location: ${currentLocation!.latitude}, ${currentLocation!.longitude}");
+
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        currentLocation!.latitude!,
+        currentLocation!.longitude!,
+      );
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        fullAddress =
+            "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+        print("Address obtained: $fullAddress");
+      }
+    } catch (e) {
+      print("Error fetching address: $e");
+      fullAddress = "Address not available";
+    }
+
+    try {
+      final places = await apiService.fetchNearbyPlaces(
+        currentLocation!.latitude!,
+        currentLocation!.longitude!,
+      );
+      restaurants = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('restaurant');
+      }).toList();
+      cafes = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('cafe');
+      }).toList();
+      desserts = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('dessert') || types.contains('bakery');
+      }).toList();
+
+      if (firebaseSessionId != null) {
+        await firebaseService.saveEstablishments(firebaseSessionId!, places);
+        print("Saved establishments to Firebase");
+      }
+    } catch (e) {
+      print('Error fetching nearby places: $e');
+    }
+
+    setState(() {
+      isLoading = false;
+    });
+  }
+
+  /// Updates location by directly calling loc.Location() without going to MapScreen.
+  Future<void> _updateLocationWithoutMap() async {
+    print("Updating location from device...");
+    loc.LocationData? newLocation = await loc.Location().getLocation();
+    setState(() {
+      currentLocation = newLocation;
+      isLoading = true;
+    });
+    print("New location: ${newLocation.latitude}, ${newLocation.longitude}");
+
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        newLocation.latitude!,
+        newLocation.longitude!,
+      );
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        fullAddress =
+            "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+        print("New address: $fullAddress");
+      }
+    } catch (e) {
+      print("Error fetching address: $e");
+      fullAddress = "Address not available";
+    }
+
+    try {
+      final places = await apiService.fetchNearbyPlaces(
+        newLocation.latitude!,
+        newLocation.longitude!,
+      );
+      restaurants = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('restaurant');
+      }).toList();
+      cafes = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('cafe');
+      }).toList();
+      desserts = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('dessert') || types.contains('bakery');
+      }).toList();
+
+      if (firebaseSessionId != null) {
+        await firebaseService.saveEstablishments(firebaseSessionId!, places);
+        print("Updated Firebase with new establishments");
+      }
+    } catch (e) {
+      print('Error fetching nearby places: $e');
+    }
+    setState(() {
+      isLoading = false;
+    });
+  }
+
+  /// Update location from MapScreen (user manually chooses location).
+  Future<void> _updateLocationFromMap() async {
+    final newLocation = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MapScreen(
+          onLocationUpdated: (LatLng pos) {
+            print(
+                "New location from MapScreen: ${pos.latitude}, ${pos.longitude}");
+          },
+        ),
+      ),
+    );
+
+    if (newLocation != null && newLocation is LatLng) {
+      print("Received new location from MapScreen");
+      setState(() {
+        currentLocation = loc.LocationData.fromMap({
+          'latitude': newLocation.latitude,
+          'longitude': newLocation.longitude,
+        });
+        isLoading = true;
+      });
+      try {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          newLocation.latitude,
+          newLocation.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          fullAddress =
+              "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+          print("Updated address: $fullAddress");
+        }
+      } catch (e) {
+        print("Error fetching address: $e");
+        fullAddress = "Address not available";
+      }
+      try {
+        final places = await apiService.fetchNearbyPlaces(
+          currentLocation!.latitude!,
+          currentLocation!.longitude!,
+        );
+        restaurants = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('restaurant');
+        }).toList();
+        cafes = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('cafe');
+        }).toList();
+        desserts = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('dessert') || types.contains('bakery');
+        }).toList();
+        if (firebaseSessionId != null) {
+          await firebaseService.saveEstablishments(firebaseSessionId!, places);
+          print("Updated Firebase with new establishments from MapScreen");
+        }
+      } catch (e) {
+        print('Error fetching nearby places: $e');
+      }
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  /// Helper: Build a collapsible section using ExpansionTile.
+  Widget _buildCollapsibleSection(String title, List<dynamic> places) {
+    return ExpansionTile(
+      title: Text(
+        title,
+        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      ),
+      children: [
+        ListView.builder(
+          shrinkWrap: true,
+          physics: NeverScrollableScrollPhysics(),
+          itemCount: places.length,
+          itemBuilder: (context, index) {
+            final place = places[index];
+            return ListTile(
+              title: Text(place['name'] ?? 'No Name'),
+              subtitle: Text(place['vicinity'] ?? 'No Address'),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    periodicTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Get the current Firebase user for display.
+    final user = FirebaseAuth.instance.currentUser;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Scout Mode'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.explore),
+            tooltip: 'Rendezvous Mode',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => RendezvousScreen()),
+              );
+            },
+          ),
+        ],
+      ),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: <Widget>[
+            DrawerHeader(
+              decoration: BoxDecoration(
+                color: Colors.deepOrange,
+              ),
+              child: Text(
+                'Menu',
+                style: TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.flight_takeoff),
+              title: Text('Trips'),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => TripsScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.logout),
+              title: Text('Logout'),
+              onTap: _logout,
+            ),
+          ],
+        ),
+      ),
+      body: isLoading
+          ? Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (currentLocation != null)
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text(
+                        'Welcome, ${user?.displayName ?? "User"}!\nYour current address is:\n${fullAddress ?? "Loading address..."}',
+                        style: TextStyle(fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  _buildCollapsibleSection("Restaurants", restaurants),
+                  _buildCollapsibleSection("Cafés", cafes),
+                  _buildCollapsibleSection("Dessert Places", desserts),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 20.0, horizontal: 16.0),
+                    child: ElevatedButton(
+                      onPressed: _stopScoutMode,
+                      child: Text('Stop Scout Mode'),
+                      style: ElevatedButton.styleFrom(
+                        padding: EdgeInsets.symmetric(vertical: 16.0),
+                        textStyle: TextStyle(fontSize: 18),
+                        minimumSize: Size(double.infinity, 50),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+/// RendezvousScreen remains largely unchanged.
+class RendezvousScreen extends StatefulWidget {
+  const RendezvousScreen({super.key});
+
+  @override
+  _RendezvousScreenState createState() => _RendezvousScreenState();
+}
+
+class _RendezvousScreenState extends State<RendezvousScreen> {
+  final TextEditingController _destinationController = TextEditingController();
+  final ApiService apiService = ApiService();
+  bool isLoading = false;
+  List<dynamic> suggestions = [];
+
+  void _fetchSuggestions() async {
+    final destination = _destinationController.text.trim();
+    if (destination.isEmpty) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final data = await apiService.fetchRendezvousSuggestions(destination);
+      setState(() {
+        suggestions = data;
+      });
+    } catch (e) {
+      print('Error fetching suggestions: $e');
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _destinationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Rendezvous Mode'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _destinationController,
+              decoration: InputDecoration(
+                labelText: 'Enter your final destination',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _fetchSuggestions,
+              child: Text('Plan My Day'),
+            ),
+            SizedBox(height: 16),
+            isLoading
+                ? CircularProgressIndicator()
+                : Expanded(
+                    child: ListView.builder(
+                      itemCount: suggestions.length,
+                      itemBuilder: (context, index) {
+                        final suggestion = suggestions[index];
+                        return ListTile(
+                          title: Text(suggestion['name'] ?? 'No Name'),
+                          subtitle: Text(suggestion['address'] ?? 'No Address'),
+                        );
+                      },
+                    ),
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+}

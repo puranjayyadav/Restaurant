@@ -483,6 +483,27 @@ CUISINE_LIST = {
     "australian_cafe": "brekkie avocado smash flat white ricotta hotcakes"
 }
 
+# --- 2.5 DEFINE AESTHETIC MODIFIERS ---
+AESTHETIC_MODIFIERS = [
+    "instagrammable",
+    "trendy",
+    "beautiful interior",
+    "viral",
+    "cute",
+    "chic",
+    "photogenic"
+]
+
+
+def generate_aesthetic_queries(neighborhood: str, cuisine_term: str) -> List[str]:
+    """Builds aesthetic-focused queries for a cuisine in a neighborhood."""
+    return [
+        f"Trendy {cuisine_term} restaurants in {neighborhood}",
+        f"Most {AESTHETIC_MODIFIERS[0]} {cuisine_term} in {neighborhood}",
+        f"{cuisine_term} with {AESTHETIC_MODIFIERS[2]} in {neighborhood}"
+    ]
+
+
 # --- 3. DEFINE NEIGHBORHOODS ---
 NYC_AREAS = {
     # === BATCH 1: MANHATTAN SOUTH (Downtown & Nightlife) ===
@@ -570,6 +591,24 @@ if __name__ == "__main__":
                 sleep_seconds = random.uniform(5, 12)
                 print(f"   [Waiting {sleep_seconds:.1f}s...]")
                 time.sleep(sleep_seconds)
+
+                # 3. Aesthetic pass for the same cuisine
+                aesthetic_queries = generate_aesthetic_queries(hood, search_query)
+                for aesthetic_query in aesthetic_queries:
+                    print(f"   > Aesthetic search: '{aesthetic_query}'...")
+                    try:
+                        results = run_grid_search(location_string, aesthetic_query, GRID_SIZE)
+                        if SUPABASE_ENABLED and results:
+                            neighborhood_name = hood.split(',')[0].strip()
+                            aesthetic_slug = f"{cuisine_name}_aesthetic"
+                            save_batch_to_supabase(results, aesthetic_slug, neighborhood_name)
+                    except Exception as e:
+                        print(f"   [!] Error in aesthetic search for {cuisine_name} in {hood}: {e}")
+                        continue
+
+                    sleep_seconds = random.uniform(5, 12)
+                    print(f"   [Waiting {sleep_seconds:.1f}s...]")
+                    time.sleep(sleep_seconds)
             
             # Longer pause (20-30s) when switching neighborhoods to let connections reset
             long_sleep = random.uniform(20, 30)

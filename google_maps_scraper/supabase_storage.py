@@ -82,7 +82,8 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
     try:
         # STEP 1: Upsert venues
         # This will INSERT new venues or UPDATE existing ones
-        supabase.table("venues").upsert(
+        print(f"      [INFO] Upserting {len(venues_data)} venues (deduplicating by place_id)...")
+        venue_response = supabase.table("venues").upsert(
             venues_data,
             on_conflict="place_id"
         ).execute()
@@ -90,12 +91,14 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
         # STEP 2: Upsert vibe associations
         # This creates the many-to-many relationship
         # If the same place+vibe combo exists, it won't create a duplicate
-        supabase.table("venue_vibes").upsert(
+        print(f"      [INFO] Linking venues to vibe '{vibe_slug}' in '{neighborhood}'...")
+        vibe_response = supabase.table("venue_vibes").upsert(
             vibes_data,
             on_conflict="place_id,vibe_slug"
         ).execute()
         
-        print(f"      [SUCCESS] Saved {len(results)} venues to Supabase")
+        print(f"      [SUCCESS] ✅ Saved {len(results)} venues (duplicates automatically merged)")
+        print(f"      [INFO] Vibe associations: {len(vibes_data)} links created/updated")
         return True
         
     except Exception as e:

@@ -10,9 +10,10 @@ from .views import (
     generate_and_enrich_itinerary, get_pre_created_itineraries, 
     pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
     next_best_action, create_itinerary_skeleton, get_address_suggestions_view,
-    get_hotspot_itinerary
+    get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query
 )
 from .density_heatmap import get_density_heatmap
+from . import lemon8_api
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -58,7 +59,19 @@ urlpatterns = [
     path('discovery/featured-itineraries/', get_featured_itineraries, name='featured-itineraries'),
     path('itineraries/create-skeleton/', create_itinerary_skeleton, name='create-itinerary-skeleton'),
     path('address-suggestions/', get_address_suggestions_view, name='address-suggestions'),
-    # Heatmap \u0026 Density endpoints
+    # Heatmap & Density endpoints
     path('neighborhoods/density/', get_density_heatmap, name='neighborhood-density'),
     path('neighborhoods/itinerary/', get_hotspot_itinerary, name='hotspot-itinerary'),
+    
+    # Lemon8 endpoints
+    path('lemon8/sql-extract/', lemon8_api.sql_extract_view, name='lemon8-sql-extract'),
+    path('lemon8/semantic-search/', lemon8_api.semantic_search_view, name='lemon8-semantic-search'),
+    
+    # Unified endpoint for Flutter app
+    path('generate-itinerary/', lemon8_api.unified_generate_itinerary_view, name='generate-itinerary'),
+    
+    # Centralized Day Planner API endpoints
+    path('api/parse-query/', parse_query, name='api-parse-query'),
+    path('api/generate-itinerary/', generate_itinerary, name='api-generate-itinerary'),
+    path('api/itinerary-details/', itinerary_details, name='api-itinerary-details'),
 ]

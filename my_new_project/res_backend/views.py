@@ -93,18 +93,19 @@ if not firebase_admin._apps:
                     "3. Go to Variables tab\n"
                     "4. Add FIREBASE_CREDENTIALS with the JSON content from your service account file"
                 )
-                print(f"ERROR: {error_msg}")
-                raise FileNotFoundError(error_msg)
-    
-    try:
-        firebase_admin.initialize_app(cred)
-        print("DEBUG: Firebase app initialized successfully")
-    except Exception as init_error:
-        print(f"ERROR: Failed to initialize Firebase app: {str(init_error)}")
-        raise
+                print(f"WARNING: {error_msg}")
+                cred = None
+                
+    if cred:
+        try:
+            firebase_admin.initialize_app(cred)
+            print("DEBUG: Firebase app initialized successfully")
+        except Exception as init_error:
+            print(f"ERROR: Failed to initialize Firebase app: {str(init_error)}")
+            cred = None
 
 # Get a Firestore client
-db = firestore.client()
+db = firestore.client() if cred else None
 
 @api_view(['POST'])
 @authentication_classes([])  # Disable DRF's token authentication for this endpoint
@@ -3768,5 +3769,345 @@ def next_best_action(request):
         print(f"ERROR: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to get next best action: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def generate_itinerary(request):
+    """
+    Centralized API endpoint for generating full-day itineraries.
+    
+    Request body:
+    {
+        "start_lat": 40.7209,
+        "start_long": -74.0022,
+        "selected_vibe": "romantic",
+        "social_context": "couple",
+        "radius_meters": 3000,
+        "local_time_start": "10:00"
+    }
+    
+    Returns:
+    {
+        "itinerary": [
+            {"slot": "coffee", "time": "10:00 AM", "place_id": "...", "name": "...", "vibe_match": 0.85},
+            ...
+        ],
+        "hidden_gems_injected": 2,
+        "total_walk_time_mins": 45,
+        "narrative": "..."
+    }
+    """
+    try:
+        from .day_planner_service import DayPlannerService
+        
+        data = request.data
+        
+        start_lat = data.get('start_lat')
+        start_long = data.get('start_long')
+        selected_vibe = data.get('selected_vibe')
+        social_context = data.get('social_context', 'couple')
+        radius_meters = int(data.get('radius_meters', 3000))
+        local_time_start = data.get('local_time_start', '10:00')
+        
+        # Validate required fields
+        if start_lat is None or start_long is None:
+            return Response(
+                {"error": "start_lat and start_long are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate social_context
+        valid_contexts = ['couple', 'solo', 'group', 'family']
+        if social_context not in valid_contexts:
+            return Response(
+                {"error": f"social_context must be one of: {', '.join(valid_contexts)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Extract cuisine preferences from request
+        cuisine_preferences = data.get('cuisine_preferences')
+        cuisine_preference_min = data.get('cuisine_preference_min')
+        cuisine_preference_max = data.get('cuisine_preference_max')
+        
+        print(f"DEBUG: Received cuisine_preferences: {cuisine_preferences}")
+        print(f"DEBUG: Received cuisine_preference_min: {cuisine_preference_min}")
+        print(f"DEBUG: Received cuisine_preference_max: {cuisine_preference_max}")
+        
+        # Generate itinerary
+        planner = DayPlannerService()
+        result = planner.generate_itinerary(
+            start_lat=float(start_lat),
+            start_long=float(start_long),
+            selected_vibe=selected_vibe,
+            social_context=social_context,
+            radius_meters=radius_meters,
+            local_time_start=local_time_start,
+            cuisine_preferences=cuisine_preferences,
+            cuisine_preference_min=cuisine_preference_min,
+            cuisine_preference_max=cuisine_preference_max
+        )
+        
+        if "error" in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(result, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: generate_itinerary endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to generate itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def itinerary_details(request):
+    """
+    Fetch full venue details for place_ids returned from generate-itinerary.
+    
+    Request body:
+    {
+        "place_ids": ["ChIJeVu4h9hbwokRxYUvKBeI738", "ChIJdVqFHRVbwokRtqzlk7CRCb0"]
+    }
+    
+    Returns:
+    {
+        "venues": [
+            {
+                "place_id": "...",
+                "name": "...",
+                "address": "...",
+                "photos": [...],
+                "hours": [...],
+                "rating": 4.8,
+                "insights": {...}
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        from .day_planner_service import DayPlannerService
+        
+        data = request.data
+        place_ids = data.get('place_ids', [])
+        
+        if not place_ids:
+            return Response(
+                {"error": "place_ids array is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not isinstance(place_ids, list):
+            return Response(
+                {"error": "place_ids must be an array"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Limit to reasonable number
+        if len(place_ids) > 20:
+            return Response(
+                {"error": "Maximum 20 place_ids allowed per request"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Fetch venue details
+        planner = DayPlannerService()
+        venues = planner.get_venue_details(place_ids)
+        
+        return Response(
+            {"venues": venues},
+            status=status.HTTP_200_OK
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: itinerary_details endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to fetch venue details: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def parse_query(request):
+    """
+    Parse natural language query using LLM to extract structured parameters.
+    
+    Request body:
+    {
+        "query": "romantic dinner date in SoHo",
+        "user_location": {"lat": 40.7209, "lng": -74.0022}  // optional
+    }
+    
+    Returns:
+    {
+        "selected_vibe": "romantic",
+        "social_context": "couple",
+        "location_hint": "SoHo",
+        "time_preference": "evening",
+        "parsed_intent": "..."
+    }
+    """
+    try:
+        import requests
+        from django.conf import settings
+        from decouple import config
+        
+        query = request.data.get('query', '')
+        if not query:
+            return Response(
+                {"error": "query is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        api_key = (getattr(settings, 'OPENROUTER_API_KEYv3', '') or 
+                  config('OPENROUTER_API_KEYv3', default='') or
+                  getattr(settings, 'OPENROUTER_API_KEY', '') or 
+                  config('OPENROUTER_API_KEY', default=''))
+        model = config('OPENROUTER_CHAT_MODEL', default='xiaomi/mimo-v2-flash:free')
+        
+        # Get available vibe slugs from venue_vibes table
+        from supabase_config import get_supabase_client
+        supabase = get_supabase_client()
+        vibe_slugs = [
+            "romantic", "dinner_date", "speakeasy", "fine_dining",
+            "solo_date", "work_friendly", "coffee", "coffee_run",
+            "dinner_group", "brunch_buzzy", "casual_lunch",
+            "breakfast_classic", "family_friendly", "late_night_eats",
+            "art_house", "new_american_aesthetic", "australian_cafe_aesthetic",
+            "italian_red_sauce_aesthetic", "natural_wine", "pizza_nyc_aesthetic",
+            "french_bistro_aesthetic", "japanese_izakaya_aesthetic", "korean_pocha_aesthetic"
+        ]
+        
+        # Try to get more vibes from database (optional enhancement)
+        if supabase:
+            try:
+                # Get a sample of distinct vibe slugs
+                result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
+                if result.data:
+                    db_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
+                    vibe_slugs.extend(db_vibes[:30])  # Add up to 30 more
+                    vibe_slugs = list(set(vibe_slugs))  # Remove duplicates
+            except Exception as e:
+                print(f"Could not fetch vibes from DB: {e}")
+                # Use default list above
+        
+        system_prompt = f"""You are a query parser for a day planner app. Extract structured parameters from natural language queries.
+
+Available vibe slugs: {', '.join(vibe_slugs[:30])}
+
+IMPORTANT VIBE MAPPING RULES:
+- "romantic", "date night", "date", "romantic dinner" → "dinner_date" (NOT speakeasy, NOT romantic)
+- "speakeasy", "hidden bar", "cocktail bar" → "speakeasy"
+- "coffee", "cafe", "morning coffee" → "coffee" or "coffee_run"
+- "brunch", "breakfast" → "brunch_buzzy" or "breakfast_classic"
+- "fine dining", "upscale", "fancy" → "fine_dining"
+- "solo", "alone", "work" → "solo_date" or "work_friendly"
+
+Extract and return ONLY valid JSON with these fields:
+- selected_vibe: vibe_slug that best matches the query (or null)
+- social_context: "couple", "solo", "group", or "family" (or null)
+- location_hint: neighborhood or area mentioned (or null)
+- time_preference: "morning", "afternoon", "evening", "night" (or null)
+- parsed_intent: brief summary of what user wants
+
+Examples:
+Query: "romantic dinner date"
+{{"selected_vibe": "dinner_date", "social_context": "couple", "time_preference": "evening", "parsed_intent": "Romantic dinner date"}}
+
+Query: "romantic date night"
+{{"selected_vibe": "dinner_date", "social_context": "couple", "time_preference": "evening", "parsed_intent": "Romantic date night"}}
+
+Query: "solo coffee morning"
+{{"selected_vibe": "coffee", "social_context": "solo", "time_preference": "morning", "parsed_intent": "Solo coffee morning"}}
+
+Query: "family brunch"
+{{"selected_vibe": "brunch_buzzy", "social_context": "family", "time_preference": "morning", "parsed_intent": "Family brunch"}}
+
+Return ONLY the JSON object, no markdown, no explanations."""
+        
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    "temperature": 0.3,
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            llm_response = response.json()['choices'][0]['message']['content'].strip()
+            
+            # Clean up markdown if present
+            if llm_response.startswith("```json"):
+                llm_response = llm_response.split("```json")[1].split("```")[0].strip()
+            elif llm_response.startswith("```"):
+                llm_response = llm_response.split("```")[1].split("```")[0].strip()
+            
+            import json
+            parsed = json.loads(llm_response)
+            
+            return Response(parsed, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            print(f"Error calling LLM: {e}")
+            # Fallback: simple keyword matching
+            query_lower = query.lower()
+            result = {
+                "selected_vibe": None,
+                "social_context": None,
+                "location_hint": None,
+                "time_preference": None,
+                "parsed_intent": query
+            }
+            
+            # Simple vibe matching - map "romantic" to "dinner_date" (valid vibe_slug)
+            if any(word in query_lower for word in ["romantic", "romance", "date", "dinner date", "date night"]):
+                result["selected_vibe"] = "dinner_date"  # Use valid vibe_slug
+                result["social_context"] = "couple"
+            elif any(word in query_lower for word in ["solo", "alone", "myself"]):
+                result["social_context"] = "solo"
+            elif any(word in query_lower for word in ["coffee", "cafe", "morning"]):
+                result["selected_vibe"] = "coffee"
+                result["time_preference"] = "morning"
+            elif any(word in query_lower for word in ["brunch", "breakfast"]):
+                result["selected_vibe"] = "brunch_buzzy"
+                result["time_preference"] = "morning"
+            elif any(word in query_lower for word in ["group", "friends", "party"]):
+                result["social_context"] = "group"
+            
+            # Time preference
+            if any(word in query_lower for word in ["morning", "breakfast", "coffee"]):
+                result["time_preference"] = "morning"
+            elif any(word in query_lower for word in ["afternoon", "lunch"]):
+                result["time_preference"] = "afternoon"
+            elif any(word in query_lower for word in ["evening", "dinner", "night"]):
+                result["time_preference"] = "evening"
+            
+            return Response(result, status=status.HTTP_200_OK)
+            
+    except Exception as e:
+        import traceback
+        print(f"ERROR: parse_query endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to parse query: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

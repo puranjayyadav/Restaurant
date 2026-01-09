@@ -16,8 +16,21 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
+
+def api_root(request):
+    """Simple root endpoint to show API is running"""
+    return JsonResponse({
+        'message': 'Restaurant Tracker API',
+        'endpoints': {
+            'admin': '/admin/',
+            'api': '/api/',
+            'featured_itineraries': '/api/discovery/featured-itineraries/',
+        }
+    })
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('res_backend.urls')),
+    path('', api_root, name='api_root'),
 ]

@@ -12,21 +12,46 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+from decouple import config
+import os
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Explicitly load .env from root
+root_env = BASE_DIR.parent / '.env'
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    # Try current directory as well
+    load_dotenv()
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-4d0n8)^15a88n+v-dtt)3*h6b6p02=b(z#$%6(4o5bd^a+tt6$'
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-4d0n8)^15a88n+v-dtt)3*h6b6p02=b(z#$%6(4o5bd^a+tt6$')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=lambda v: [s.strip() for s in v.split(',')])
+
+# Feature Flags
+# Set to True to enable OR-Tools optimizer for itinerary generation
+# When enabled, uses mathematical optimization instead of rule-based filtering
+# Falls back to rule-based algorithm if OR-Tools fails
+USE_OR_TOOLS_OPTIMIZER = True  # Set to True to enable OR-Tools optimization
+
+# Clustering + gap filling for walkable neighborhoods
+ENABLE_CLUSTERING = True
+ENABLE_GAP_FILLING = True
+DBSCAN_EPS_KM = 0.4  # 400m walkability radius
+DBSCAN_MIN_SAMPLES = 3
+MAX_CLUSTERS_TO_USE = 3
+CLUSTER_STRATEGY = 'single'  # 'single' or 'multi_penalized'
 
 
 # Application definition
@@ -65,8 +90,10 @@ SIMPLE_JWT = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Whitenoise for static files
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'res_backend.middleware.RequestLoggingMiddleware',  # Add request logging
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -98,12 +125,29 @@ WSGI_APPLICATION = 'my_new_project.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Use Supabase PostgreSQL if DATABASE_URL is set, otherwise use SQLite for local dev
+import os
+import dj_database_url
+
+# Try to load from .env file first, then fall back to environment variable
+DATABASE_URL = config('DATABASE_URL', default=os.environ.get('DATABASE_URL'))
+if DATABASE_URL:
+    # Use Supabase/PostgreSQL if DATABASE_URL is provided
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
-}
+else:
+    # Default to SQLite for local development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -141,6 +185,17 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Whitenoise storage for compressed and cached static files
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -148,5 +203,8 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development
+CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
+if not CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=lambda v: [s.strip() for s in v.split(',')] if v else [])
+
 CORS_ALLOW_CREDENTIALS = True

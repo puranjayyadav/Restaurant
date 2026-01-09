@@ -1026,20 +1026,25 @@ class DayPlannerService:
             result = self.supabase.table("venues").select("*").in_("place_id", place_ids).execute()
             venues = result.data if result.data else []
             
-            # Fetch insights
+            # Fetch insights including full_ai_json
             insights = {}
             try:
-                insights_result = self.supabase.table("place_insights").select("*").in_("place_id", place_ids).execute()
+                insights_result = self.supabase.table("place_insights").select("place_id, full_ai_json, display_hook, display_short_name, work_friendly, is_trap, safety_flag").in_("place_id", place_ids).execute()
                 if insights_result.data:
-                    insights = {ins["place_id"]: ins for ins in insights_result.data}
-            except:
+                    for ins in insights_result.data:
+                        place_id = ins.get("place_id")
+                        if place_id:
+                            insights[place_id] = ins
+            except Exception as e:
+                print(f"Error fetching insights batch: {e}")
                 # Fallback: fetch individually if batch query fails
                 for place_id in place_ids:
                     try:
-                        result = self.supabase.table("place_insights").select("*").eq("place_id", place_id).limit(1).execute()
+                        result = self.supabase.table("place_insights").select("place_id, full_ai_json, display_hook, display_short_name, work_friendly, is_trap, safety_flag").eq("place_id", place_id).limit(1).execute()
                         if result.data:
                             insights[place_id] = result.data[0]
-                    except:
+                    except Exception as e2:
+                        print(f"Error fetching insight for {place_id}: {e2}")
                         continue
             
             # Combine data
@@ -1047,6 +1052,19 @@ class DayPlannerService:
             for venue in venues:
                 place_id = venue["place_id"]
                 insight = insights.get(place_id, {})
+                
+                # Parse full_ai_json if available
+                rich_data = None
+                if insight.get("full_ai_json"):
+                    try:
+                        import json
+                        if isinstance(insight["full_ai_json"], str):
+                            rich_data = json.loads(insight["full_ai_json"])
+                        elif isinstance(insight["full_ai_json"], dict):
+                            rich_data = insight["full_ai_json"]
+                    except Exception as e:
+                        print(f"Error parsing full_ai_json for {place_id}: {e}")
+                        rich_data = None
                 
                 detailed_venues.append({
                     "place_id": place_id,
@@ -1073,7 +1091,8 @@ class DayPlannerService:
                         "work_friendly": insight.get("work_friendly", False),
                         "is_trap": insight.get("is_trap", False),
                         "safety_flag": insight.get("safety_flag", False),
-                    } if insight else {}
+                    } if insight else {},
+                    "rich_data": rich_data  # Include full_ai_json parsed data
                 })
             
             return detailed_venues

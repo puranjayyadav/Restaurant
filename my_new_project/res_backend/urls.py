@@ -13,7 +13,13 @@ from .views import (
     get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query, geocode_location
 )
 from .density_heatmap import get_density_heatmap
-from . import lemon8_api
+try:
+    from . import lemon8_api
+except ImportError:
+    lemon8_api = None
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning("lemon8_api module not found - Lemon8 endpoints will be disabled")
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -63,12 +69,10 @@ urlpatterns = [
     path('neighborhoods/density/', get_density_heatmap, name='neighborhood-density'),
     path('neighborhoods/itinerary/', get_hotspot_itinerary, name='hotspot-itinerary'),
     
-    # Lemon8 endpoints
-    path('lemon8/sql-extract/', lemon8_api.sql_extract_view, name='lemon8-sql-extract'),
-    path('lemon8/semantic-search/', lemon8_api.semantic_search_view, name='lemon8-semantic-search'),
-    
-    # Unified endpoint for Flutter app
-    path('generate-itinerary/', lemon8_api.unified_generate_itinerary_view, name='generate-itinerary'),
+    # Lemon8 endpoints (only if module is available)
+    *([path('lemon8/sql-extract/', lemon8_api.sql_extract_view, name='lemon8-sql-extract'),
+       path('lemon8/semantic-search/', lemon8_api.semantic_search_view, name='lemon8-semantic-search'),
+       path('generate-itinerary/', lemon8_api.unified_generate_itinerary_view, name='generate-itinerary')] if lemon8_api else []),
     
     # Centralized Day Planner API endpoints
     path('api/geocode-location/', geocode_location, name='api-geocode-location'),

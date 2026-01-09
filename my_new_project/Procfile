@@ -1,2 +1,2 @@
-web: python run_gunicorn.py
+web: gunicorn my_new_project.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
 

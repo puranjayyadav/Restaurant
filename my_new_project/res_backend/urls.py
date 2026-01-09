@@ -10,7 +10,7 @@ from .views import (
     generate_and_enrich_itinerary, get_pre_created_itineraries, 
     pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
     next_best_action, create_itinerary_skeleton, get_address_suggestions_view,
-    get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query
+    get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query, geocode_location
 )
 from .density_heatmap import get_density_heatmap
 from . import lemon8_api
@@ -71,6 +71,7 @@ urlpatterns = [
     path('generate-itinerary/', lemon8_api.unified_generate_itinerary_view, name='generate-itinerary'),
     
     # Centralized Day Planner API endpoints
+    path('api/geocode-location/', geocode_location, name='api-geocode-location'),
     path('api/parse-query/', parse_query, name='api-parse-query'),
     path('api/generate-itinerary/', generate_itinerary, name='api-generate-itinerary'),
     path('api/itinerary-details/', itinerary_details, name='api-itinerary-details'),

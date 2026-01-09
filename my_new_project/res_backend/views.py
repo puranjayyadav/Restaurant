@@ -3779,14 +3779,22 @@ def generate_itinerary(request):
     """
     Centralized API endpoint for generating full-day itineraries.
     
-    Request body:
+    Request body (accepts both formats):
     {
-        "start_lat": 40.7209,
-        "start_long": -74.0022,
-        "selected_vibe": "romantic",
-        "social_context": "couple",
+        "start_lat": 40.7209,  // or "latitude"
+        "start_long": -74.0022,  // or "longitude"
+        "selected_vibe": "romantic",  // optional, will be randomized if null
+        "social_context": "couple",  // optional, defaults to "couple" if null
         "radius_meters": 3000,
         "local_time_start": "10:00"
+    }
+    
+    Alternative format (from geocoding endpoint):
+    {
+        "latitude": 40.7209,
+        "longitude": -74.0022,
+        "base_location": "midtown",  // optional, for reference
+        ...
     }
     
     Returns:
@@ -3805,19 +3813,69 @@ def generate_itinerary(request):
         
         data = request.data
         
-        start_lat = data.get('start_lat')
-        start_long = data.get('start_long')
+        # Accept both formats: start_lat/start_long or latitude/longitude (from geocoding)
+        start_lat = data.get('start_lat') or data.get('latitude')
+        start_long = data.get('start_long') or data.get('longitude')
         selected_vibe = data.get('selected_vibe')
-        social_context = data.get('social_context', 'couple')
+        social_context = data.get('social_context')
         radius_meters = int(data.get('radius_meters', 3000))
         local_time_start = data.get('local_time_start', '10:00')
         
-        # Validate required fields
-        if start_lat is None or start_long is None:
-            return Response(
-                {"error": "start_lat and start_long are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # #region agent log
+        import json
+        import os
+        log_path = r'c:\Users\PURANJAY\OneDrive\Documents\Res_2\.cursor\debug.log'
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'views.py:3817',
+                    'message': 'Received generate_itinerary request',
+                    'data': {
+                        'start_lat': start_lat,
+                        'start_long': start_long,
+                        'selected_vibe': selected_vibe,
+                        'social_context': social_context,
+                        'will_use_random_nyc': start_lat is None or start_long is None
+                    },
+                    'timestamp': int(__import__('time').time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
+        if selected_vibe is None:
+            import random
+            from supabase_config import get_supabase_client
+            supabase = get_supabase_client()
+            if supabase:
+                try:
+                    result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
+                    if result.data:
+                        available_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
+                        if available_vibes:
+                            selected_vibe = random.choice(available_vibes)
+                            print(f"DEBUG: Randomized selected_vibe to: {selected_vibe}")
+                except Exception as e:
+                    print(f"Could not fetch vibes for randomization: {e}")
+                    # Fallback to common vibes
+                    common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                    selected_vibe = random.choice(common_vibes)
+            else:
+                # Fallback to common vibes
+                common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                selected_vibe = random.choice(common_vibes)
+        
+        if social_context is None:
+            social_context = 'couple'
+            print(f"DEBUG: Defaulted social_context to: couple")
+        
+        # If coordinates are not provided, the service will use a random NYC location
+        # Convert to float only if provided, otherwise pass None
+        start_lat = float(start_lat) if start_lat is not None else None
+        start_long = float(start_long) if start_long is not None else None
         
         # Validate social_context
         valid_contexts = ['couple', 'solo', 'group', 'family']
@@ -3839,8 +3897,8 @@ def generate_itinerary(request):
         # Generate itinerary
         planner = DayPlannerService()
         result = planner.generate_itinerary(
-            start_lat=float(start_lat),
-            start_long=float(start_long),
+            start_lat=start_lat,
+            start_long=start_long,
             selected_vibe=selected_vibe,
             social_context=social_context,
             radius_meters=radius_meters,
@@ -3932,6 +3990,59 @@ def itinerary_details(request):
         print(f"ERROR: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to fetch venue details: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def geocode_location(request):
+    """
+    Geocode a location hint (neighborhood, city) to coordinates with non-deterministic randomization.
+    
+    Each call returns different coordinates within the location for variety.
+    
+    Request body:
+    {
+        "location_hint": "DUMBO"
+    }
+    
+    Returns:
+    {
+        "latitude": 40.7033,
+        "longitude": -73.9881,
+        "base_location": "DUMBO, Brooklyn"
+    }
+    """
+    try:
+        from .geocoding_service import geocode_with_randomization, is_within_nyc_bounds
+        
+        location_hint = request.data.get('location_hint', '')
+        if not location_hint:
+            return Response(
+                {"error": "location_hint is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        lat, lng = geocode_with_randomization(location_hint)
+        
+        # Verify coordinates are within NYC bounds (should always be true after our update)
+        if not is_within_nyc_bounds(lat, lng):
+            print(f"WARNING: Geocoded coordinates ({lat}, {lng}) are outside NYC bounds for '{location_hint}'")
+            # This shouldn't happen with our updated geocoding service, but log it if it does
+        
+        return Response({
+            "latitude": lat,
+            "longitude": lng,
+            "base_location": location_hint
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: geocode_location endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to geocode location: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -4064,6 +4175,32 @@ Return ONLY the JSON object, no markdown, no explanations."""
             import json
             parsed = json.loads(llm_response)
             
+            # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
+            if parsed.get('selected_vibe') is None:
+                # Get random vibe from available vibes
+                import random
+                if supabase:
+                    try:
+                        result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
+                        if result.data:
+                            available_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
+                            if available_vibes:
+                                parsed['selected_vibe'] = random.choice(available_vibes)
+                                print(f"DEBUG: Randomized selected_vibe to: {parsed['selected_vibe']}")
+                    except Exception as e:
+                        print(f"Could not fetch vibes for randomization: {e}")
+                        # Fallback to common vibes
+                        common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                        parsed['selected_vibe'] = random.choice(common_vibes)
+                else:
+                    # Fallback to common vibes
+                    common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                    parsed['selected_vibe'] = random.choice(common_vibes)
+            
+            if parsed.get('social_context') is None:
+                parsed['social_context'] = "couple"
+                print(f"DEBUG: Defaulted social_context to: couple")
+            
             return Response(parsed, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -4100,6 +4237,33 @@ Return ONLY the JSON object, no markdown, no explanations."""
                 result["time_preference"] = "afternoon"
             elif any(word in query_lower for word in ["evening", "dinner", "night"]):
                 result["time_preference"] = "evening"
+            
+            # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
+            if result.get("selected_vibe") is None:
+                import random
+                from supabase_config import get_supabase_client
+                supabase = get_supabase_client()
+                if supabase:
+                    try:
+                        vibe_result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
+                        if vibe_result.data:
+                            available_vibes = list(set([v.get('vibe_slug') for v in vibe_result.data if v.get('vibe_slug')]))
+                            if available_vibes:
+                                result["selected_vibe"] = random.choice(available_vibes)
+                                print(f"DEBUG: Randomized selected_vibe to: {result['selected_vibe']}")
+                    except Exception as e:
+                        print(f"Could not fetch vibes for randomization: {e}")
+                        # Fallback to common vibes
+                        common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                        result["selected_vibe"] = random.choice(common_vibes)
+                else:
+                    # Fallback to common vibes
+                    common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
+                    result["selected_vibe"] = random.choice(common_vibes)
+            
+            if result.get("social_context") is None:
+                result["social_context"] = "couple"
+                print(f"DEBUG: Defaulted social_context to: couple")
             
             return Response(result, status=status.HTTP_200_OK)
             

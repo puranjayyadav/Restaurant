@@ -73,16 +73,127 @@ class DayPlannerService:
         "family": (4, 5),
     }
     
-    # NYC default center
-    NYC_CENTER = (40.7128, -74.0060)
+    # NYC bounds for random location generation
+    NYC_BOUNDS = {
+        'min_lat': 40.4774,  # Southernmost point (Staten Island)
+        'max_lat': 40.9176,  # Northernmost point (Bronx)
+        'min_lon': -74.2591,  # Westernmost point (New Jersey border)
+        'max_lon': -73.7004,  # Easternmost point (Queens)
+    }
+    NYC_CENTER = (40.7128, -74.0060)  # Manhattan center (fallback)
+    
+    # Curated list of NYC neighborhoods/areas with good venue coverage
+    # These are known areas where we have substantial venue data
+    NYC_VENUE_RICH_LOCATIONS = [
+        # Manhattan
+        (40.7580, -73.9855),  # Times Square / Midtown West
+        (40.7505, -73.9934),  # Midtown East
+        (40.7614, -73.9776),  # Central Park South
+        (40.7282, -73.9942),  # Greenwich Village
+        (40.7359, -73.9911),  # SoHo
+        (40.7489, -73.9680),  # Upper East Side
+        (40.7831, -73.9712),  # Upper West Side
+        (40.7282, -73.9848),  # West Village
+        (40.7614, -73.9776),  # Lincoln Center
+        (40.7505, -73.9934),  # Grand Central
+        (40.7589, -73.9851),  # Theater District
+        (40.7282, -73.9942),  # NYU / Washington Square
+        # Brooklyn
+        (40.6782, -73.9442),  # Williamsburg
+        (40.6892, -73.9442),  # Greenpoint
+        (40.6782, -73.9942),  # DUMBO
+        (40.6501, -73.9496),  # Park Slope
+        (40.6862, -73.9772),  # Brooklyn Heights
+        (40.6782, -73.9442),  # Bushwick
+        (40.6501, -73.9496),  # Prospect Heights
+        (40.6782, -73.9942),  # Brooklyn Bridge area
+        # Queens
+        (40.7489, -73.9370),  # Long Island City
+        (40.7282, -73.7949),  # Astoria
+        (40.7282, -73.9370),  # Sunnyside
+        # Bronx
+        (40.8506, -73.9264),  # South Bronx / Port Morris
+        # Staten Island (limited but included)
+        (40.6415, -74.0776),  # St. George / Ferry area
+    ]
     
     def __init__(self):
         self.supabase = get_supabase_client()
     
+    def _get_random_nyc_location(self) -> Tuple[float, float]:
+        """
+        Generate a random location from curated NYC neighborhoods with good venue coverage.
+        This ensures we always pick areas where we have substantial venue data.
+        """
+        import random
+        # Select a random neighborhood from our curated list
+        base_lat, base_lon = random.choice(self.NYC_VENUE_RICH_LOCATIONS)
+        
+        # Add a small random offset (200m-800m) to provide variety within the neighborhood
+        # This ensures different results even when the same neighborhood is selected
+        offset_distance_m = random.uniform(200, 800)
+        offset_bearing_deg = random.uniform(0, 360)
+        offset_bearing_rad = math.radians(offset_bearing_deg)
+        
+        # Convert offset to lat/lon delta
+        lat_offset_km = (offset_distance_m / 1000) * math.cos(offset_bearing_rad)
+        lon_offset_km = (offset_distance_m / 1000) * math.sin(offset_bearing_rad) / math.cos(math.radians(base_lat))
+        
+        # Convert km to degrees
+        lat_offset = lat_offset_km / 111.0
+        lon_offset = lon_offset_km / 111.0
+        
+        # Apply offset
+        randomized_lat = base_lat + lat_offset
+        randomized_lon = base_lon + lon_offset
+        
+        # Ensure still within NYC bounds (clamp if needed)
+        randomized_lat = max(self.NYC_BOUNDS['min_lat'], min(self.NYC_BOUNDS['max_lat'], randomized_lat))
+        randomized_lon = max(self.NYC_BOUNDS['min_lon'], min(self.NYC_BOUNDS['max_lon'], randomized_lon))
+        
+        return randomized_lat, randomized_lon
+    
+    def _add_random_offset(self, lat: float, lon: float, min_distance_m: int = 500, max_distance_m: int = 2000) -> Tuple[float, float]:
+        """
+        Add a random offset to coordinates (same logic as geocode-location).
+        This provides variety when the same location is used multiple times.
+        
+        Args:
+            lat: Base latitude
+            lon: Base longitude
+            min_distance_m: Minimum offset distance in meters (default 500m)
+            max_distance_m: Maximum offset distance in meters (default 2000m)
+        
+        Returns:
+            Tuple of (randomized_lat, randomized_lon)
+        """
+        import random
+        import math
+        
+        # Generate random offset (500m - 2km radius) for variety
+        offset_distance_m = random.uniform(min_distance_m, max_distance_m)
+        offset_bearing_deg = random.uniform(0, 360)  # Random direction in degrees
+        offset_bearing_rad = math.radians(offset_bearing_deg)
+        
+        # Convert offset to lat/lon delta using bearing
+        # 1 degree latitude ≈ 111km, 1 degree longitude ≈ 111km * cos(latitude)
+        lat_offset_km = (offset_distance_m / 1000) * math.cos(offset_bearing_rad)
+        lon_offset_km = (offset_distance_m / 1000) * math.sin(offset_bearing_rad) / math.cos(math.radians(lat))
+        
+        # Convert km to degrees
+        lat_offset = lat_offset_km / 111.0
+        lon_offset = lon_offset_km / 111.0
+        
+        # Apply offset
+        randomized_lat = lat + lat_offset
+        randomized_lon = lon + lon_offset
+        
+        return randomized_lat, randomized_lon
+    
     def generate_itinerary(
         self,
-        start_lat: float,
-        start_long: float,
+        start_lat: Optional[float] = None,
+        start_long: Optional[float] = None,
         selected_vibe: Optional[str] = None,
         social_context: str = "couple",
         radius_meters: int = 3000,
@@ -95,8 +206,8 @@ class DayPlannerService:
         Generate a full-day itinerary
         
         Args:
-            start_lat: Starting latitude
-            start_long: Starting longitude
+            start_lat: Starting latitude (optional, defaults to random NYC location)
+            start_long: Starting longitude (optional, defaults to random NYC location)
             selected_vibe: Optional vibe slug to filter by
             social_context: couple, solo, group, or family
             radius_meters: Search radius in meters
@@ -115,9 +226,54 @@ class DayPlannerService:
         except:
             start_hour = 10
         
-        # Use NYC center if coordinates not provided
+        # Use random NYC location if coordinates not provided
+        original_coords_provided = start_lat is not None and start_long is not None
         if not start_lat or not start_long:
-            start_lat, start_long = self.NYC_CENTER
+            # #region agent log
+            import json
+            import os
+            log_path = r'c:\Users\PURANJAY\OneDrive\Documents\Res_2\.cursor\debug.log'
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'A',
+                        'location': 'day_planner_service.py:169',
+                        'message': 'No coordinates provided, generating random NYC location',
+                        'data': {
+                            'start_lat_received': start_lat,
+                            'start_long_received': start_long
+                        },
+                        'timestamp': int(__import__('time').time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            start_lat, start_long = self._get_random_nyc_location()
+            print(f"DEBUG: Using random NYC location: ({start_lat:.4f}, {start_long:.4f})")
+            # #region agent log
+            try:
+                with open(log_path, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'A',
+                        'location': 'day_planner_service.py:175',
+                        'message': 'Random NYC location generated',
+                        'data': {
+                            'random_lat': start_lat,
+                            'random_lon': start_long
+                        },
+                        'timestamp': int(__import__('time').time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+        else:
+            # Add random offset to provided coordinates for variety (same as geocode-location)
+            # This ensures different results even when same filter coordinates are used
+            original_lat, original_lon = start_lat, start_long
+            start_lat, start_long = self._add_random_offset(start_lat, start_long)
+            print(f"DEBUG: Added random offset to coordinates: ({original_lat:.4f}, {original_lon:.4f}) → ({start_lat:.4f}, {start_long:.4f})")
         
         # Target 7 places total
         target_stops = 7
@@ -129,38 +285,167 @@ class DayPlannerService:
         }
         final_vibe = vibe_mapping.get(selected_vibe, selected_vibe) if selected_vibe else None
         
-        # Fetch filtered venues (with vibe/cuisine preferences) - limit to max 3
-        filtered_venues = self._fetch_venues(
-            start_lat, start_long, radius_meters, final_vibe,
-            cuisine_preferences=cuisine_preferences,
-            cuisine_preference_min=cuisine_preference_min,
-            cuisine_preference_max=cuisine_preference_max
-        )
+        # Retry mechanism: if no venues found and we used a random location, try different locations
+        max_retries = 3 if not original_coords_provided else 0  # Only retry if coordinates were randomly generated
+        retry_count = 0
+        all_venues = []
         
-        # Inject hidden gems (1-2 entries) that match filters
-        hidden_gems = self._fetch_hidden_gems(
-            start_lat, start_long, radius_meters, final_vibe,
-            cuisine_preferences=cuisine_preferences
-        )
-        gems_injected = min(2, len(hidden_gems))
+        # #region agent log
+        import json
+        import os
+        log_path = r'c:\Users\PURANJAY\OneDrive\Documents\Res_2\.cursor\debug.log'
+        # #endregion
         
-        # Limit filtered venues to max 3 (including hidden gems)
-        filtered_venues_limited = (filtered_venues + hidden_gems[:gems_injected])[:3]
-        
-        # Fetch diverse venues for remaining slots (coffee, parks, bookstores, other restaurants)
-        diverse_venues = self._fetch_diverse_venues(
-            start_lat, start_long, radius_meters,
-            exclude_place_ids=[v.get("place_id") for v in filtered_venues_limited if v.get("place_id")]
-        )
-        
-        # Combine: max 3 filtered venues + diverse venues to reach 7 total
-        all_venues = filtered_venues_limited + diverse_venues
+        while retry_count <= max_retries and not all_venues:
+            if retry_count > 0:
+                # Try a different random location
+                start_lat, start_long = self._get_random_nyc_location()
+                print(f"DEBUG: Retry {retry_count}: Trying different NYC location: ({start_lat:.4f}, {start_long:.4f})")
+                # #region agent log
+                try:
+                    with open(log_path, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'A',
+                            'location': 'day_planner_service.py:280',
+                            'message': f'Retry {retry_count}: Trying different location',
+                            'data': {
+                                'retry_count': retry_count,
+                                'retry_lat': start_lat,
+                                'retry_lon': start_long
+                            },
+                            'timestamp': int(__import__('time').time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+            
+            # Fetch filtered venues (with vibe/cuisine preferences) - limit to max 3
+            filtered_venues = self._fetch_venues(
+                start_lat, start_long, radius_meters, final_vibe,
+                cuisine_preferences=cuisine_preferences,
+                cuisine_preference_min=cuisine_preference_min,
+                cuisine_preference_max=cuisine_preference_max
+            )
+            
+            # Inject hidden gems (1-2 entries) that match filters
+            hidden_gems = self._fetch_hidden_gems(
+                start_lat, start_long, radius_meters, final_vibe,
+                cuisine_preferences=cuisine_preferences
+            )
+            gems_injected = min(2, len(hidden_gems))
+            
+            # Combine filtered venues and hidden gems, deduplicating by place_id
+            combined_venues = filtered_venues + hidden_gems[:gems_injected]
+            seen_place_ids = set()
+            deduplicated_venues = []
+            duplicates_found = 0
+            for venue in combined_venues:
+                place_id = venue.get("place_id")
+                if place_id and place_id not in seen_place_ids:
+                    seen_place_ids.add(place_id)
+                    deduplicated_venues.append(venue)
+                elif place_id:
+                    duplicates_found += 1
+                    print(f"DEBUG: Duplicate venue detected (place_id: {place_id}, name: {venue.get('name', 'Unknown')})")
+            
+            if duplicates_found > 0:
+                print(f"DEBUG: Removed {duplicates_found} duplicate venues from filtered_venues + hidden_gems")
+            
+            # Limit to max 3 filtered venues (including hidden gems)
+            filtered_venues_limited = deduplicated_venues[:3]
+            
+            # Fetch diverse venues for remaining slots (coffee, parks, bookstores, other restaurants)
+            # Exclude place_ids already in filtered_venues_limited
+            exclude_place_ids = [v.get("place_id") for v in filtered_venues_limited if v.get("place_id")]
+            diverse_venues = self._fetch_diverse_venues(
+                start_lat, start_long, radius_meters,
+                exclude_place_ids=exclude_place_ids
+            )
+            
+            # Combine: max 3 filtered venues + diverse venues to reach 7 total
+            # Deduplicate again to ensure no duplicates between filtered and diverse venues
+            all_venues = filtered_venues_limited.copy()
+            seen_place_ids = set([v.get("place_id") for v in filtered_venues_limited if v.get("place_id")])
+            diverse_duplicates = 0
+            for venue in diverse_venues:
+                place_id = venue.get("place_id")
+                if place_id and place_id not in seen_place_ids:
+                    seen_place_ids.add(place_id)
+                    all_venues.append(venue)
+                elif place_id:
+                    diverse_duplicates += 1
+                    print(f"DEBUG: Duplicate venue in diverse_venues (place_id: {place_id}, name: {venue.get('name', 'Unknown')})")
+            
+            if diverse_duplicates > 0:
+                print(f"DEBUG: Removed {diverse_duplicates} duplicate venues from diverse_venues")
+            
+            print(f"DEBUG: Final all_venues count: {len(all_venues)} (unique place_ids: {len(seen_place_ids)})")
+            
+            if not all_venues:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    print(f"DEBUG: No venues found at location ({start_lat:.4f}, {start_long:.4f}), retrying...")
+                    continue
         
         if not all_venues:
-            return {"error": "No venues found in the specified area"}
+            return {"error": "No venues found in the specified area after trying multiple locations"}
         
         # Build itinerary using time slots (7 places total)
         itinerary = self._build_itinerary(all_venues, start_lat, start_long, start_hour, target_stops)
+        
+        # Ensure at least one hidden gem is included
+        has_hidden_gem = any(item.get("is_hidden_gem", False) for item in itinerary)
+        if not has_hidden_gem and hidden_gems:
+            # Force at least one hidden gem into the itinerary
+            # Find the best slot to insert it (prefer middle slots)
+            gem = hidden_gems[0]
+            if len(itinerary) > 0:
+                # Create a venue lookup map
+                venue_map = {v.get("place_id"): v for v in all_venues if v.get("place_id")}
+                
+                # Insert at a middle position (around index 3-4)
+                insert_index = min(3, len(itinerary) - 1)
+                current_item = itinerary[insert_index]
+                
+                # Calculate distance from previous item
+                # Get previous venue's location from venue_map
+                prev_lat, prev_lon = start_lat, start_long
+                if insert_index > 0:
+                    prev_place_id = itinerary[insert_index - 1].get("place_id")
+                    if prev_place_id and prev_place_id in venue_map:
+                        prev_venue = venue_map[prev_place_id]
+                        prev_lat = float(prev_venue.get("latitude", start_lat))
+                        prev_lon = float(prev_venue.get("longitude", start_long))
+                
+                try:
+                    dist = haversine_distance(
+                        prev_lat, prev_lon,
+                        float(gem["latitude"]), float(gem["longitude"])
+                    )
+                except (ValueError, TypeError):
+                    dist = 500  # Default distance
+                
+                # Create itinerary item for hidden gem
+                gem_item = {
+                    "slot": current_item.get("slot", "afternoon"),
+                    "time": current_item.get("time", "14:00"),
+                    "place_id": gem["place_id"],
+                    "name": gem.get("name", "Unknown"),
+                    "vibe_match": self._calculate_vibe_match(gem, current_item.get("slot", "afternoon")),
+                    "distance_m": int(dist),
+                    "is_hidden_gem": True,
+                    "latitude": float(gem.get("latitude", 0)),
+                    "longitude": float(gem.get("longitude", 0)),
+                    "phone": gem.get("phone"),
+                    "website": gem.get("website")
+                }
+                
+                # Insert the hidden gem
+                itinerary.insert(insert_index, gem_item)
+                # Remove last item if we exceed target_stops
+                if len(itinerary) > target_stops:
+                    itinerary = itinerary[:target_stops]
         
         # Calculate total walk time
         total_walk_time = self._calculate_walk_time(itinerary)
@@ -586,6 +871,11 @@ class DayPlannerService:
             )
             
             if venue:
+                place_id = venue.get("place_id")
+                # Double-check place_id is valid and not already used (defensive check)
+                if not place_id or place_id in used_place_ids:
+                    continue
+                
                 # Calculate distance from current location
                 try:
                     dist = haversine_distance(
@@ -604,14 +894,18 @@ class DayPlannerService:
                 itinerary.append({
                     "slot": slot_name,
                     "time": time_str,
-                    "place_id": venue["place_id"],
+                    "place_id": place_id,
                     "name": venue.get("name", "Unknown"),
                     "vibe_match": vibe_match,
                     "distance_m": int(dist),
-                    "is_hidden_gem": venue.get("is_hidden_gem", False)
+                    "is_hidden_gem": venue.get("is_hidden_gem", False),
+                    "latitude": float(venue.get("latitude", 0)),
+                    "longitude": float(venue.get("longitude", 0)),
+                    "phone": venue.get("phone"),
+                    "website": venue.get("website")
                 })
                 
-                used_place_ids.add(venue["place_id"])
+                used_place_ids.add(place_id)
                 current_lat = venue["latitude"]
                 current_lon = venue["longitude"]
                 slots_used += 1
@@ -646,7 +940,9 @@ class DayPlannerService:
         
         candidates = []
         for venue in venues:
-            if venue["place_id"] in used_place_ids:
+            place_id = venue.get("place_id")
+            # Skip venues without place_id or already used
+            if not place_id or place_id in used_place_ids:
                 continue
             
             # Check if venue matches slot category (simplified - would need category field)
@@ -663,6 +959,10 @@ class DayPlannerService:
             
             # Score: higher rating, closer distance
             score = rating * 20 - (dist / 100)  # Rating weighted more
+            
+            # Boost hidden gems significantly to ensure at least one is included
+            if venue.get("is_hidden_gem", False):
+                score += 50  # Significant boost for hidden gems
             
             candidates.append((score, venue, dist))
         

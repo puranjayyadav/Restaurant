@@ -11,7 +11,7 @@ whitenoise==6.9.0
 firebase-admin==6.6.0
 requests==2.32.3
 thefuzz==0.20.0
-python-Levenshtein==0.23.0
+# python-Levenshtein==0.23.0  # Removed: incompatible with Python 3.13, thefuzz works without it (slower but functional)
 ortools>=9.8.0
 phonenumbers>=8.13.0
 scikit-learn>=1.0.0

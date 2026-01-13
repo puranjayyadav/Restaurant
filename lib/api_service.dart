@@ -48,11 +48,11 @@ class ApiService {
         final features = data['features'] as List? ?? [];
         for (var feature in features) {
           final props = feature['properties'] as Map? ?? {};
-          
+
           // Filter for US only
           final cCode = props['countrycode']?.toString().toUpperCase();
           final cName = props['country']?.toString().toLowerCase();
-          
+
           if (cCode != 'US' && cName != 'united states' && cName != 'usa') {
             continue;
           }
@@ -113,6 +113,47 @@ class ApiService {
   }
 
   // Backend URL - Automatically switches between local and production
+  /// Fetch detailed itinerary information with rich venue data
+  Future<Map<String, dynamic>?> fetchItineraryDetails(
+      List<String> placeIds) async {
+    if (placeIds.isEmpty) return null;
+
+    try {
+      final Uri url = Uri.parse('$baseUrl/api/api/itinerary-details/');
+      print('DEBUG: Full URL: $url');
+      print('DEBUG: Fetching itinerary details for ${placeIds.length} places');
+      print('DEBUG: Place IDs: $placeIds');
+
+      final requestBody = json.encode({'place_ids': placeIds});
+      print('DEBUG: Request body: $requestBody');
+
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: requestBody,
+          )
+          .timeout(const Duration(seconds: 30));
+
+      print('DEBUG: Response status code: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        print('DEBUG: Successfully fetched itinerary details');
+        print('DEBUG: Response data: $data');
+        return data as Map<String, dynamic>;
+      } else {
+        print('ERROR: Itinerary details fetch failed: ${response.statusCode}');
+        print('ERROR: Response body: ${response.body}');
+        return null;
+      }
+    } catch (e, stackTrace) {
+      print('ERROR: Exception fetching itinerary details: $e');
+      print('ERROR: Stack trace: $stackTrace');
+      return null;
+    }
+  }
+
   static String get baseUrl {
     // Set to true for local development, false for Railway production
     const bool useLocal = true;
@@ -279,21 +320,21 @@ class ApiService {
       int skippedNoCoords = 0;
       int skippedDistance = 0;
       int skippedCategory = 0;
-      
+
       // Filter and process results - lemon8_articles has nested structure
       for (var article in data) {
         if (article is! Map) continue;
-        
+
         // Get itinerary data and coordinate arrays
         final itineraryData = article['itinerary_data'];
         final stopsLat = article['stops_lat'] as List<dynamic>?;
         final stopsLng = article['stops_lng'] as List<dynamic>?;
-        
+
         if (itineraryData == null || stopsLat == null || stopsLng == null) {
           skippedNoData++;
           continue;
         }
-        
+
         // Parse stops from itinerary_data
         List<dynamic> stops = [];
         if (itineraryData is Map) {
@@ -301,25 +342,27 @@ class ApiService {
         } else if (itineraryData is List) {
           stops = itineraryData;
         }
-        
+
         if (stops.isEmpty) {
           skippedNoData++;
           continue;
         }
-        
+
         // Process each stop with its coordinates
-        for (int i = 0; i < stops.length && i < stopsLat.length && i < stopsLng.length; i++) {
+        for (int i = 0;
+            i < stops.length && i < stopsLat.length && i < stopsLng.length;
+            i++) {
           final stop = stops[i];
           if (stop is! Map) continue;
-          
+
           final placeLat = _safeDouble(stopsLat[i], 0.0);
           final placeLng = _safeDouble(stopsLng[i], 0.0);
-          
+
           if (placeLat == 0.0 || placeLng == 0.0) {
             skippedNoCoords++;
             continue;
           }
-          
+
           // Calculate distance if location provided
           double distance = 0.0;
           if (lat != null && lng != null) {
@@ -329,24 +372,26 @@ class ApiService {
               continue;
             }
           }
-          
+
           // Filter by category - exclude generic types
           final category = (stop['category'] ?? '').toString().toLowerCase();
           final excludedTypes = ['park', 'state', 'city', 'neighborhood'];
-          
+
           // Skip if it's a generic type
           if (excludedTypes.any((type) => category.contains(type))) {
             skippedCategory++;
             continue;
           }
-          
+
           // Format as itinerary-compatible item
           results.add({
             'name': stop['place_name'] ?? stop['name'] ?? 'Instagram Spot',
             'lat': placeLat,
             'lng': placeLng,
             'category': stop['category'] ?? 'Cafe',
-            'description': stop['notes'] ?? stop['description'] ?? 'A highly aesthetic, Instagram-worthy discovery.',
+            'description': stop['notes'] ??
+                stop['description'] ??
+                'A highly aesthetic, Instagram-worthy discovery.',
             'image_url': stop['image_url'],
             'lemon8_url': article['url'],
             'is_lemon8': true,
@@ -354,22 +399,25 @@ class ApiService {
           });
         }
       }
-      
-      print('DEBUG: Filtered results - Total: ${results.length}, Skipped (no data: $skippedNoData, no coords: $skippedNoCoords, distance: $skippedDistance, category: $skippedCategory)');
-      
+
+      print(
+          'DEBUG: Filtered results - Total: ${results.length}, Skipped (no data: $skippedNoData, no coords: $skippedNoCoords, distance: $skippedDistance, category: $skippedCategory)');
+
       // Sort by distance if location provided, otherwise shuffle
       if (lat != null && lng != null) {
-        results.sort((a, b) => (a['distance_km'] as double).compareTo(b['distance_km'] as double));
+        results.sort((a, b) =>
+            (a['distance_km'] as double).compareTo(b['distance_km'] as double));
       } else {
         results.shuffle();
       }
-      
+
       final filtered = results.take(limit).toList();
       print('DEBUG: Returning ${filtered.length} Instagram-worthy places');
       if (filtered.isNotEmpty) {
-        print('DEBUG: First place: ${filtered[0]['name']} at ${filtered[0]['distance_km']}km');
+        print(
+            'DEBUG: First place: ${filtered[0]['name']} at ${filtered[0]['distance_km']}km');
       }
-      
+
       return filtered;
     } catch (e) {
       print('ERROR: Exception in getInstagramWorthyPlaces: $e');
@@ -383,7 +431,8 @@ class ApiService {
     final http.Response response =
         await http.post(url, body: {"userId": userId});
     if (response.statusCode == 200) {
-      final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+      final Map<String, dynamic> data =
+          json.decode(utf8.decode(response.bodyBytes));
       // Assuming your Django endpoint returns a JSON with a 'sessionId' field.
       return data['sessionId'];
     } else {
@@ -897,14 +946,15 @@ class ApiService {
     );
 
     if (response.statusCode == 200) {
-      return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      return json.decode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
     } else {
       final errorBody = json.decode(utf8.decode(response.bodyBytes));
       throw Exception(errorBody['error'] ?? 'Failed to generate day itinerary');
     }
   }
 
-    // / Get scraped restaurants with filtering options
+  // / Get scraped restaurants with filtering options
   Future<List<Map<String, dynamic>>> getScrapedRestaurants({
     double? lat,
     double? lng,
@@ -943,7 +993,8 @@ class ApiService {
         }
         return [];
       } else {
-        print('ERROR: Failed to fetch scraped restaurants: ${response.statusCode}');
+        print(
+            'ERROR: Failed to fetch scraped restaurants: ${response.statusCode}');
         return [];
       }
     } catch (e) {
@@ -1025,7 +1076,9 @@ class ApiService {
           'lng': lng,
         }),
       );
-      return response.statusCode == 201 || response.statusCode == 200 || response.statusCode == 204;
+      return response.statusCode == 201 ||
+          response.statusCode == 200 ||
+          response.statusCode == 204;
     } catch (e) {
       print('ERROR: lovePlace failure: $e');
       return false;
@@ -1036,7 +1089,8 @@ class ApiService {
   Future<bool> unlovePlace(String userId, String placeId) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
-      final uri = Uri.parse('$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId');
+      final uri = Uri.parse(
+          '$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId');
       final response = await http.delete(
         uri,
         headers: {
@@ -1055,7 +1109,8 @@ class ApiService {
   Future<bool> isPlaceLoved(String userId, String placeId) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
-      final uri = Uri.parse('$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId&select=id');
+      final uri = Uri.parse(
+          '$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId&select=id');
       final response = await http.get(
         uri,
         headers: {
@@ -1078,7 +1133,8 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getLovedPlaces(String userId) async {
     try {
       if (supabaseAnonKey.isEmpty) return [];
-      final uri = Uri.parse('$supabaseUrl/loved_places?user_id=eq.$userId&order=saved_at.desc');
+      final uri = Uri.parse(
+          '$supabaseUrl/loved_places?user_id=eq.$userId&order=saved_at.desc');
       final response = await http.get(
         uri,
         headers: {
@@ -1116,7 +1172,9 @@ class ApiService {
           'name': name,
         }),
       );
-      return response.statusCode == 201 || response.statusCode == 204 || response.statusCode == 200;
+      return response.statusCode == 201 ||
+          response.statusCode == 204 ||
+          response.statusCode == 200;
     } catch (e) {
       print('ERROR: dislikePlace failure: $e');
       return false;
@@ -1127,7 +1185,8 @@ class ApiService {
   Future<List<String>> getDislikedPlaceIds(String userId) async {
     try {
       if (supabaseAnonKey.isEmpty) return [];
-      final uri = Uri.parse('$supabaseUrl/disliked_places?user_id=eq.$userId&select=place_id');
+      final uri = Uri.parse(
+          '$supabaseUrl/disliked_places?user_id=eq.$userId&select=place_id');
       final response = await http.get(
         uri,
         headers: {
@@ -1147,7 +1206,8 @@ class ApiService {
   }
 
   /// Submit a user tip
-  Future<bool> submitUserTip(String userId, String placeId, String tipText) async {
+  Future<bool> submitUserTip(
+      String userId, String placeId, String tipText) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
       final uri = Uri.parse('$supabaseUrl/user_tips');
@@ -1172,7 +1232,8 @@ class ApiService {
   }
 
   /// Record an uploaded image URL
-  Future<bool> recordPlaceImage(String userId, String placeId, String imageUrl) async {
+  Future<bool> recordPlaceImage(
+      String userId, String placeId, String imageUrl) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
       final uri = Uri.parse('$supabaseUrl/place_images');
@@ -1201,11 +1262,11 @@ class ApiService {
   Future<String?> uploadImageToSupabase(String fileName, File imageFile) async {
     try {
       if (supabaseAnonKey.isEmpty) return null;
-      
+
       // Bucket name: place-images
       final storageUrl = supabaseUrl.replaceAll('/rest/v1', '/storage/v1');
       final uri = Uri.parse('$storageUrl/object/place-images/$fileName');
-      
+
       final response = await http.post(
         uri,
         headers: {
@@ -1221,7 +1282,8 @@ class ApiService {
         // https://diytyziczzosylmyrfxo.supabase.co/storage/v1/object/public/place-images/filename
         return '$storageUrl/object/public/place-images/$fileName';
       }
-      print('ERROR: uploadImageToSupabase failure: ${response.statusCode} - ${response.body}');
+      print(
+          'ERROR: uploadImageToSupabase failure: ${response.statusCode} - ${response.body}');
       return null;
     } catch (e) {
       print('ERROR: uploadImageToSupabase exception: $e');
@@ -1273,7 +1335,8 @@ class ApiService {
 
           if (response.statusCode == 200) {
             try {
-              final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+              final data = json.decode(utf8.decode(response.bodyBytes))
+                  as Map<String, dynamic>;
               print('DEBUG: Response keys: ${data.keys.toList()}');
 
               // Validate response structure
@@ -1535,18 +1598,20 @@ class ApiService {
       final itemMap = item as Map<String, dynamic>;
 
       // Basic fields
-      normalized['place_id'] = (itemMap['place_id'] ?? itemMap['placeId'])?.toString();
-      normalized['place_name'] = (itemMap['place_name'] ?? itemMap['name'])?.toString().trim() ?? '';
+      normalized['place_id'] =
+          (itemMap['place_id'] ?? itemMap['placeId'])?.toString();
+      normalized['place_name'] =
+          (itemMap['place_name'] ?? itemMap['name'])?.toString().trim() ?? '';
       normalized['address'] = itemMap['address']?.toString().trim() ?? '';
-      
+
       // Handle coordinates (direct or nested)
       if (itemMap['coordinates'] != null && itemMap['coordinates'] is Map) {
-          final coords = itemMap['coordinates'] as Map;
-          normalized['latitude'] = _safeDouble(coords['lat'], null);
-          normalized['longitude'] = _safeDouble(coords['lng'], null);
+        final coords = itemMap['coordinates'] as Map;
+        normalized['latitude'] = _safeDouble(coords['lat'], null);
+        normalized['longitude'] = _safeDouble(coords['lng'], null);
       } else {
-          normalized['latitude'] = _safeDouble(itemMap['latitude'], null);
-          normalized['longitude'] = _safeDouble(itemMap['longitude'], null);
+        normalized['latitude'] = _safeDouble(itemMap['latitude'], null);
+        normalized['longitude'] = _safeDouble(itemMap['longitude'], null);
       }
 
       normalized['rating'] = _safeDouble(itemMap['rating'], 0.0);
@@ -2849,7 +2914,7 @@ class ApiService {
       }
 
       final uri = Uri.parse('$supabaseUrl/itineraries');
-      
+
       final resp = await http.post(
         uri,
         headers: {
@@ -2865,7 +2930,8 @@ class ApiService {
         print('DEBUG: Itinerary saved successfully');
         return;
       } else {
-        throw Exception('Failed to save itinerary: ${resp.statusCode} - ${resp.body}');
+        throw Exception(
+            'Failed to save itinerary: ${resp.statusCode} - ${resp.body}');
       }
     } catch (e) {
       print('ERROR: Exception saving itinerary: $e');
@@ -2931,7 +2997,7 @@ class ApiService {
         print('ERROR: Failed to submit itinerary: ${response.statusCode}');
         print('Response: ${response.body}');
         try {
-          final errorData = json.decode(response.body);
+          final errorData = json.decode(utf8.decode(response.bodyBytes));
           throw Exception(errorData['error'] ?? 'Failed to submit itinerary');
         } catch (_) {
           throw Exception('Failed to submit itinerary: ${response.statusCode}');
@@ -2942,6 +3008,78 @@ class ApiService {
       rethrow;
     }
   }
+
+  /// Save an itinerary to the user's saved_lists
+  Future<Map<String, dynamic>?> saveItineraryToUserList({
+    required String userId,
+    required String title,
+    String? subtitle,
+    String? description,
+    required Map<String, dynamic> itineraryData,
+  }) async {
+    try {
+      final url = Uri.parse('$baseUrl/api/save-itinerary/');
+
+      final requestBody = {
+        'user_id': userId,
+        'title': title,
+        'subtitle': subtitle ?? '',
+        'description': description ?? '',
+        'itinerary_data': itineraryData,
+      };
+
+      final response = await http
+          .post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(requestBody),
+      )
+          .timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw Exception('Request timeout after 30 seconds');
+        },
+      );
+
+      if (response.statusCode == 201) {
+        return json.decode(utf8.decode(response.bodyBytes));
+      } else {
+        print('ERROR: Failed to save itinerary: ${response.statusCode}');
+        print('Response: ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      print('ERROR: Exception saving itinerary: $e');
+      return null;
+    }
+  }
+
+  /// Get all saved itineraries for a user
+  Future<List<Map<String, dynamic>>> getSavedItineraries(String userId) async {
+    try {
+      final url = Uri.parse('$baseUrl/api/saved-itineraries/?user_id=$userId');
+
+      final response = await http.get(url).timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          throw Exception('Request timeout after 30 seconds');
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        final List<dynamic> itineraries = data['itineraries'] ?? [];
+        return List<Map<String, dynamic>>.from(itineraries);
+      } else {
+        print('ERROR: Failed to get saved itineraries: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      print('ERROR: Exception getting saved itineraries: $e');
+      return [];
+    }
+  }
+
 
   /// Get public itineraries with optional filtering
   Future<Map<String, dynamic>?> getPublicItineraries({
@@ -3248,7 +3386,6 @@ class ApiService {
     return (bearingDegrees + 360) % 360;
   }
 
-
   // ============================================
   // PLANDIT REAL-TIME ITINERARY GENERATION
   // ============================================
@@ -3260,11 +3397,11 @@ class ApiService {
   }) async {
     try {
       final Uri url = Uri.parse('$baseUrl/api/parse-query/');
-      
+
       final Map<String, dynamic> requestBody = {
         'query': query,
       };
-      
+
       if (userLocation != null) {
         requestBody['user_location'] = {
           'lat': userLocation['lat'],
@@ -3273,18 +3410,21 @@ class ApiService {
       }
 
       print('DEBUG: Parsing query: "$query"');
-      
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(requestBody),
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () => throw TimeoutException('Query parsing timeout'),
-      );
+
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode(requestBody),
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw TimeoutException('Query parsing timeout'),
+          );
 
       if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        final data = json.decode(utf8.decode(response.bodyBytes))
+            as Map<String, dynamic>;
         print('DEBUG: Query parsed successfully');
         return data;
       } else {
@@ -3313,7 +3453,7 @@ class ApiService {
   }) async {
     try {
       final Uri url = Uri.parse('$baseUrl/api/generate-itinerary/');
-      
+
       final Map<String, dynamic> requestBody = {
         if (startLat != null) 'start_lat': startLat,
         if (startLong != null) 'start_long': startLong,
@@ -3327,19 +3467,24 @@ class ApiService {
         'cuisine_preferences': cuisinePreferences ?? [],
       };
 
-      print('DEBUG: Unified Request to /api/generate-itinerary/ with query="$query"');
-      
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(requestBody),
-      ).timeout(
-        const Duration(seconds: 40), // Increased timeout for unified call
-        onTimeout: () => throw TimeoutException('Itinerary generation timeout'),
-      );
+      print(
+          'DEBUG: Unified Request to /api/generate-itinerary/ with query="$query"');
+
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode(requestBody),
+          )
+          .timeout(
+            const Duration(seconds: 40), // Increased timeout for unified call
+            onTimeout: () =>
+                throw TimeoutException('Itinerary generation timeout'),
+          );
 
       if (response.statusCode == 200) {
-        final data = json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        final data = json.decode(utf8.decode(response.bodyBytes))
+            as Map<String, dynamic>;
         print('DEBUG: Itinerary generated successfully (Unified)');
         return data;
       } else {

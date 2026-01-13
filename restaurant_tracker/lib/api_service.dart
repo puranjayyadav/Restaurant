@@ -1058,6 +1058,8 @@ class ApiService {
   }) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
+      
+      // Save to loved_places table
       final uri = Uri.parse('$supabaseUrl/loved_places');
       final response = await http.post(
         uri,
@@ -1076,9 +1078,36 @@ class ApiService {
           'lng': lng,
         }),
       );
-      return response.statusCode == 201 ||
+      
+      final lovedSuccess = response.statusCode == 201 ||
           response.statusCode == 200 ||
           response.statusCode == 204;
+      
+      if (!lovedSuccess) {
+        print('ERROR: Failed to save to loved_places: ${response.statusCode}');
+        return false;
+      }
+      
+      // Also save to user_venue_interactions table
+      try {
+        final interactionResponse = await http.post(
+          Uri.parse('$baseUrl/api/api/mark-venue-interaction/'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'user_id': userId,
+            'place_id': placeId,
+            'interaction_type': 'loved',
+          }),
+        );
+        // Don't fail if interaction save fails, just log it
+        if (interactionResponse.statusCode != 200) {
+          print('WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
+        }
+      } catch (e) {
+        print('WARNING: Error saving to user_venue_interactions: $e');
+      }
+      
+      return true;
     } catch (e) {
       print('ERROR: lovePlace failure: $e');
       return false;
@@ -1089,6 +1118,8 @@ class ApiService {
   Future<bool> unlovePlace(String userId, String placeId) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
+      
+      // Remove from loved_places table
       final uri = Uri.parse(
           '$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId');
       final response = await http.delete(
@@ -1098,7 +1129,34 @@ class ApiService {
           'Authorization': 'Bearer $supabaseAnonKey',
         },
       );
-      return response.statusCode == 204 || response.statusCode == 200;
+      
+      final unloveSuccess = response.statusCode == 204 || response.statusCode == 200;
+      
+      if (!unloveSuccess) {
+        print('ERROR: Failed to remove from loved_places: ${response.statusCode}');
+        return false;
+      }
+      
+      // Also remove from user_venue_interactions table
+      try {
+        final interactionResponse = await http.delete(
+          Uri.parse('$baseUrl/api/api/delete-venue-interaction/'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'user_id': userId,
+            'place_id': placeId,
+            'interaction_type': 'loved',
+          }),
+        );
+        // Don't fail if interaction delete fails, just log it
+        if (interactionResponse.statusCode != 200) {
+          print('WARNING: Failed to remove from user_venue_interactions: ${interactionResponse.statusCode}');
+        }
+      } catch (e) {
+        print('WARNING: Error removing from user_venue_interactions: $e');
+      }
+      
+      return true;
     } catch (e) {
       print('ERROR: unlovePlace failure: $e');
       return false;
@@ -1157,8 +1215,10 @@ class ApiService {
   Future<bool> dislikePlace(String userId, String placeId, String? name) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
+      
+      // Save to disliked_places table (existing functionality)
       final uri = Uri.parse('$supabaseUrl/disliked_places');
-      final response = await http.post(
+      final response = await http.delete(
         uri,
         headers: {
           'apikey': supabaseAnonKey,
@@ -1172,11 +1232,112 @@ class ApiService {
           'name': name,
         }),
       );
-      return response.statusCode == 201 ||
+      
+      final dislikedSuccess = response.statusCode == 201 ||
           response.statusCode == 204 ||
           response.statusCode == 200;
+      
+      // Also save to user_venue_interactions table
+      try {
+        final interactionResponse = await http.delete(
+          Uri.parse('$baseUrl/api/api/delete-venue-interaction/'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({
+            'user_id': userId,
+            'place_id': placeId,
+            'interaction_type': 'not_interested',
+          }),
+        );
+        // Don't fail if interaction save fails, just log it
+        if (interactionResponse.statusCode != 200) {
+          print('WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
+        }
+      } catch (e) {
+        print('WARNING: Error saving to user_venue_interactions: $e');
+      }
+      
+      return dislikedSuccess;
     } catch (e) {
       print('ERROR: dislikePlace failure: $e');
+      return false;
+    }
+  }
+
+  /// Mark a place as seen
+  Future<bool> markPlaceAsSeen({
+    required String userId,
+    required String placeId,
+    required String name,
+    double? rating,
+    double? lat,
+    double? lng,
+  }) async {
+    try {
+      // Call the backend API endpoint to mark as seen
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/api/mark-venue-interaction/'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'user_id': userId,
+          'place_id': placeId,
+          'interaction_type': 'seen',
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        print('WARNING: Failed to save to user_venue_interactions: ${response.statusCode}');
+        return false;
+      }
+    } catch (e) {
+      print('ERROR: markPlaceAsSeen failure: $e');
+      return false;
+    }
+  }
+
+  /// Unmark a place as seen
+  Future<bool> unmarkPlaceAsSeen(String userId, String placeId) async {
+    try {
+      // Call the backend API to remove the 'seen' interaction
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/api/delete-venue-interaction/'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'user_id': userId,
+          'place_id': placeId,
+          'interaction_type': 'seen',
+        }),
+      );
+      
+      return response.statusCode == 200;
+    } catch (e) {
+      print('ERROR: unmarkPlaceAsSeen failure: $e');
+      return false;
+    }
+  }
+
+  /// Check if a place is seen by the user
+  Future<bool> isPlaceSeen(String userId, String placeId) async {
+    try {
+      if (supabaseAnonKey.isEmpty) return false;
+      final uri = Uri.parse(
+          '$supabaseUrl/user_venue_interactions?user_id=eq.$userId&place_id=eq.$placeId&interaction_type=eq.seen&select=id');
+      final response = await http.get(
+        uri,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'Authorization': 'Bearer $supabaseAnonKey',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes)) as List;
+        return data.isNotEmpty;
+      }
+      return false;
+    } catch (e) {
+      print('ERROR: isPlaceSeen failure: $e');
       return false;
     }
   }
@@ -1205,13 +1366,95 @@ class ApiService {
     }
   }
 
+  /// Save an itinerary to user_saved_itineraries table (for tracking popular itineraries)
+  Future<bool> saveItineraryToUserSaved({
+    required String userId,
+    required String itineraryId,
+    required List<Map<String, dynamic>> places,
+    String? narrative,
+    int? totalWalkTimeMins,
+    Map<String, dynamic>? filters,
+  }) async {
+    try {
+      if (supabaseAnonKey.isEmpty) return false;
+      final uri = Uri.parse('$supabaseUrl/user_saved_itineraries');
+      final response = await http.post(
+        uri,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'Authorization': 'Bearer $supabaseAnonKey',
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates',
+        },
+        body: json.encode({
+          'id': itineraryId,
+          'user_id': userId,
+          'places': places,
+          'narrative': narrative,
+          'total_walk_time_mins': totalWalkTimeMins,
+          'filters': filters,
+        }),
+      );
+      return response.statusCode == 201 ||
+          response.statusCode == 200 ||
+          response.statusCode == 204;
+    } catch (e) {
+      print('ERROR: saveItineraryToUserSaved failure: $e');
+      return false;
+    }
+  }
+
+  /// Check if an itinerary is saved by the user
+  Future<bool> isItinerarySaved(String userId, String itineraryId) async {
+    try {
+      if (supabaseAnonKey.isEmpty) return false;
+      final uri = Uri.parse(
+          '$supabaseUrl/user_saved_itineraries?user_id=eq.$userId&id=eq.$itineraryId&select=id');
+      final response = await http.get(
+        uri,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'Authorization': 'Bearer $supabaseAnonKey',
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes)) as List;
+        return data.isNotEmpty;
+      }
+      return false;
+    } catch (e) {
+      print('ERROR: isItinerarySaved failure: $e');
+      return false;
+    }
+  }
+
+  /// Remove an itinerary from user_saved_itineraries table
+  Future<bool> unsaveItinerary(String userId, String itineraryId) async {
+    try {
+      if (supabaseAnonKey.isEmpty) return false;
+      final uri = Uri.parse(
+          '$supabaseUrl/user_saved_itineraries?user_id=eq.$userId&id=eq.$itineraryId');
+      final response = await http.delete(
+        uri,
+        headers: {
+          'apikey': supabaseAnonKey,
+          'Authorization': 'Bearer $supabaseAnonKey',
+        },
+      );
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      print('ERROR: unsaveItinerary failure: $e');
+      return false;
+    }
+  }
+
   /// Submit a user tip
   Future<bool> submitUserTip(
       String userId, String placeId, String tipText) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
       final uri = Uri.parse('$supabaseUrl/user_tips');
-      final response = await http.post(
+      final response = await http.delete(
         uri,
         headers: {
           'apikey': supabaseAnonKey,
@@ -1237,7 +1480,7 @@ class ApiService {
     try {
       if (supabaseAnonKey.isEmpty) return false;
       final uri = Uri.parse('$supabaseUrl/place_images');
-      final response = await http.post(
+      final response = await http.delete(
         uri,
         headers: {
           'apikey': supabaseAnonKey,
@@ -1267,7 +1510,7 @@ class ApiService {
       final storageUrl = supabaseUrl.replaceAll('/rest/v1', '/storage/v1');
       final uri = Uri.parse('$storageUrl/object/place-images/$fileName');
 
-      final response = await http.post(
+      final response = await http.delete(
         uri,
         headers: {
           'apikey': supabaseAnonKey,
@@ -1824,7 +2067,7 @@ class ApiService {
         requestBody['tags'] = tags.join(',');
       }
 
-      final response = await http.post(
+      final response = await http.delete(
         url,
         headers: {'Content-Type': 'application/json'},
         body: json.encode(requestBody),
@@ -3018,7 +3261,7 @@ class ApiService {
     required Map<String, dynamic> itineraryData,
   }) async {
     try {
-      final url = Uri.parse('$baseUrl/api/save-itinerary/');
+      final url = Uri.parse('$baseUrl/api/api/save-itinerary/');
 
       final requestBody = {
         'user_id': userId,
@@ -3127,7 +3370,7 @@ class ApiService {
     try {
       final url =
           Uri.parse('$baseUrl/api/public-itineraries/$itineraryId/like/');
-      final response = await http.post(
+      final response = await http.delete(
         url,
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'user_id': userId}),
@@ -3180,7 +3423,7 @@ class ApiService {
     try {
       final url = Uri.parse(
           '$baseUrl/api/public-itineraries/$itineraryId/add-to-schedule/');
-      final response = await http.post(
+      final response = await http.delete(
         url,
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'user_id': userId}),
@@ -3207,7 +3450,7 @@ class ApiService {
     try {
       final url =
           Uri.parse('$baseUrl/api/public-itineraries/$itineraryId/share/');
-      final response = await http.post(
+      final response = await http.delete(
         url,
         headers: {'Content-Type': 'application/json'},
       );
@@ -3451,7 +3694,7 @@ class ApiService {
     List<String>? cuisinePreferences,
   }) async {
     try {
-      final Uri url = Uri.parse('$baseUrl/api/generate-itinerary/');
+      final Uri url = Uri.parse('$baseUrl/api/api/generate-itinerary/');
 
       // Get user ID from Firebase Auth if available
       String? userId;
@@ -3477,19 +3720,30 @@ class ApiService {
       };
 
       print(
-          'DEBUG: Unified Request to /api/generate-itinerary/ with query="$query"');
+          'DEBUG: Unified Request to /api/api/generate-itinerary/ with query="$query"');
 
-      final response = await http
-          .post(
-            url,
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode(requestBody),
-          )
-          .timeout(
-            const Duration(seconds: 40), // Increased timeout for unified call
-            onTimeout: () =>
-                throw TimeoutException('Itinerary generation timeout'),
-          );
+      http.Response response;
+      try {
+        response = await http
+            .post(
+              url,
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode(requestBody),
+            )
+            .timeout(
+              const Duration(seconds: 40), // Increased timeout for unified call
+              onTimeout: () =>
+                  throw TimeoutException('Itinerary generation timeout'),
+            );
+      } catch (e) {
+        if (e is TimeoutException) {
+          rethrow;
+        }
+        // Connection error - server might not be running
+        print('ERROR: Connection failed to $url');
+        print('ERROR: Make sure the Django server is running on $baseUrl');
+        throw Exception('Cannot connect to server. Please ensure the Django backend server is running.');
+      }
 
       if (response.statusCode == 200) {
         final data = json.decode(utf8.decode(response.bodyBytes))
@@ -3497,8 +3751,17 @@ class ApiService {
         print('DEBUG: Itinerary generated successfully (Unified)');
         return data;
       } else {
-        final errorBody = json.decode(utf8.decode(response.bodyBytes));
-        throw Exception(errorBody['error'] ?? 'Failed to generate itinerary');
+        // Check if response is JSON or HTML
+        final responseBody = utf8.decode(response.bodyBytes);
+        try {
+          final errorBody = json.decode(responseBody) as Map<String, dynamic>;
+          throw Exception(errorBody['error'] ?? 'Failed to generate itinerary');
+        } catch (jsonError) {
+          // Response is not JSON (likely HTML error page)
+          print('ERROR: Server returned HTML instead of JSON. Status: ${response.statusCode}');
+          print('ERROR: Response body (first 500 chars): ${responseBody.substring(0, responseBody.length > 500 ? 500 : responseBody.length)}');
+          throw Exception('Server error (${response.statusCode}): The server returned an error page. Please check if the Django server is running and check server logs.');
+        }
       }
     } catch (e) {
       print('ERROR: Exception in unified generateItinerary: $e');

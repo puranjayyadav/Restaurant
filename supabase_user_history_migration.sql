@@ -39,3 +39,27 @@ CREATE POLICY "Enable read access for all users" ON user_itinerary_history FOR S
 CREATE POLICY "Enable insert access for all users" ON user_itinerary_history FOR INSERT WITH CHECK (true);
 CREATE POLICY "Enable read access for all users" ON user_venue_interactions FOR SELECT USING (true);
 CREATE POLICY "Enable insert/update access for all users" ON user_venue_interactions FOR ALL USING (true);
+
+-- Table to store user-saved itineraries (only those explicitly saved by users)
+CREATE TABLE IF NOT EXISTS user_saved_itineraries (
+  id TEXT PRIMARY KEY,  -- This will be the UUID from generate_itinerary
+  user_id TEXT NOT NULL,
+  places JSONB,  -- Store the full itinerary data
+  saved_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  filters JSONB,  -- Store the original filters used
+  narrative TEXT,
+  total_walk_time_mins INTEGER
+);
+
+-- Indexes for fast lookups
+CREATE INDEX IF NOT EXISTS idx_saved_itineraries_user ON user_saved_itineraries(user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_itineraries_saved ON user_saved_itineraries(saved_at DESC);
+
+-- Enable Row Level Security
+ALTER TABLE user_saved_itineraries ENABLE ROW LEVEL SECURITY;
+
+-- Create policies for read/write access
+CREATE POLICY "Enable read access for all users" ON user_saved_itineraries FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for all users" ON user_saved_itineraries FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for all users" ON user_saved_itineraries FOR UPDATE USING (true);
+CREATE POLICY "Enable delete access for all users" ON user_saved_itineraries FOR DELETE USING (true);

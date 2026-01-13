@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'itinerary_detail_screen.dart';
 import '../api_service.dart';
+import '../widgets/beautiful_snackbar.dart';
 
 /// Premium "Begin the Journey" preview screen with timeline
 class CuratedJourneyPreviewScreen extends StatefulWidget {
@@ -24,6 +25,51 @@ class _CuratedJourneyPreviewScreenState extends State<CuratedJourneyPreviewScree
   final ApiService _apiService = ApiService();
   bool _isSaved = false;
   bool _isSaving = false;
+  bool _isCheckingSaved = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkIfSaved();
+  }
+
+  Future<void> _checkIfSaved() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        _isCheckingSaved = false;
+        _isSaved = false;
+      });
+      return;
+    }
+
+    final itineraryId = widget.itinerary['itinerary_id']?.toString();
+    if (itineraryId == null || itineraryId.isEmpty) {
+      setState(() {
+        _isCheckingSaved = false;
+        _isSaved = false;
+      });
+      return;
+    }
+
+    try {
+      final isSaved = await _apiService.isItinerarySaved(user.uid, itineraryId);
+      if (mounted) {
+        setState(() {
+          _isSaved = isSaved;
+          _isCheckingSaved = false;
+        });
+      }
+    } catch (e) {
+      print('Error checking if itinerary is saved: $e');
+      if (mounted) {
+        setState(() {
+          _isCheckingSaved = false;
+          _isSaved = false;
+        });
+      }
+    }
+  }
 
   List<Map<String, dynamic>> get _stops {
     final data = widget.itinerary['itinerary_data'];
@@ -134,30 +180,95 @@ class _CuratedJourneyPreviewScreenState extends State<CuratedJourneyPreviewScree
 
     if (_isSaving) return;
 
+    final wasSaved = _isSaved;
     setState(() {
       _isSaving = true;
     });
 
-    final result = await _apiService.saveItineraryToUserList(
-      userId: user.uid,
-      title: _title(),
-      subtitle: _subtitle(),
-      description: _description(),
-      itineraryData: widget.itinerary,
-    );
+    final itineraryId = widget.itinerary['itinerary_id']?.toString();
+    bool success = false;
+
+    if (!wasSaved) {
+      // Save the itinerary
+      // Save to user list (existing functionality)
+      final result = await _apiService.saveItineraryToUserList(
+        userId: user.uid,
+        title: _title(),
+        subtitle: _subtitle(),
+        description: _description(),
+        itineraryData: widget.itinerary,
+      );
+
+      // Also save to user_saved_itineraries for tracking popular itineraries
+      if (itineraryId != null && itineraryId.isNotEmpty) {
+        final stops = _stops;
+        final narrative = widget.itinerary['narrative']?.toString() ?? 
+                         widget.itinerary['itinerary_data']?['narrative']?.toString();
+        final totalWalkTimeMins = widget.itinerary['total_walk_time_mins'] as int? ??
+                                 widget.itinerary['itinerary_data']?['total_walk_time_mins'] as int?;
+        final filters = widget.itinerary['filters'] as Map<String, dynamic>? ??
+                        widget.itinerary['itinerary_data']?['filters'] as Map<String, dynamic>?;
+
+        // Convert stops to the format expected by saveItineraryToUserSaved
+        final places = stops.map((stop) {
+          return {
+            'place_id': stop['place_id']?.toString(),
+            'name': stop['name']?.toString() ?? stop['place_name']?.toString(),
+            'address': stop['address']?.toString(),
+            'latitude': stop['latitude'],
+            'longitude': stop['longitude'],
+            'rating': stop['rating'],
+            'slot': stop['slot']?.toString() ?? stop['slot_name']?.toString(),
+            'time': stop['time']?.toString() ?? stop['start_time']?.toString(),
+          };
+        }).toList();
+
+        try {
+          final savedSuccess = await _apiService.saveItineraryToUserSaved(
+            userId: user.uid,
+            itineraryId: itineraryId,
+            places: places,
+            narrative: narrative,
+            totalWalkTimeMins: totalWalkTimeMins,
+            filters: filters,
+          );
+          success = result != null && savedSuccess;
+          print('DEBUG: Saved itinerary to user_saved_itineraries with ID: $itineraryId');
+        } catch (e) {
+          print('WARNING: Failed to save to user_saved_itineraries: $e');
+          success = result != null; // Still consider it success if user list save worked
+        }
+      } else {
+        print('WARNING: No itinerary_id found in itinerary data, skipping user_saved_itineraries save');
+        success = result != null;
+      }
+    } else {
+      // Unsave the itinerary
+      if (itineraryId != null && itineraryId.isNotEmpty) {
+        success = await _apiService.unsaveItinerary(user.uid, itineraryId);
+      } else {
+        success = false;
+      }
+    }
 
     if (mounted) {
       setState(() {
         _isSaving = false;
-        _isSaved = result != null;
+        if (success) {
+          _isSaved = !wasSaved; // Toggle the state
+        }
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_isSaved ? 'Itinerary saved!' : 'Failed to save itinerary'),
-          backgroundColor: _isSaved ? Colors.green : Colors.red,
-        ),
-      );
+      if (success) {
+        if (!wasSaved) {
+          BeautifulSnackbar.showSuccess(context, 'Itinerary saved successfully! 💚');
+        } else {
+          BeautifulSnackbar.showError(context, 'Itinerary removed from favorites');
+        }
+      } else {
+        BeautifulSnackbar.showError(context, 
+            !wasSaved ? 'Failed to save itinerary' : 'Failed to remove itinerary');
+      }
     }
   }
 
@@ -222,20 +333,22 @@ class _CuratedJourneyPreviewScreenState extends State<CuratedJourneyPreviewScree
                           children: [
                             // Save button
                             GestureDetector(
-                              onTap: _isSaved ? null : _saveItinerary,
+                              onTap: (_isSaving || _isCheckingSaved) ? null : _saveItinerary,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 16, vertical: 8),
                                 decoration: BoxDecoration(
-                                  color: _isSaved 
-                                      ? const Color(0xFF2D5016) 
-                                      : const Color(0xFFFFD700),
+                                  color: _isCheckingSaved
+                                      ? Colors.grey[300]
+                                      : _isSaved 
+                                          ? const Color(0xFF2D5016) 
+                                          : const Color(0xFFFFD700),
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    _isSaving
+                                    (_isSaving || _isCheckingSaved)
                                         ? const SizedBox(
                                             width: 18,
                                             height: 18,
@@ -253,7 +366,11 @@ class _CuratedJourneyPreviewScreenState extends State<CuratedJourneyPreviewScree
                                           ),
                                     const SizedBox(width: 6),
                                     Text(
-                                      _isSaved ? 'Saved' : 'Save',
+                                      _isCheckingSaved
+                                          ? '...'
+                                          : _isSaved 
+                                              ? 'Saved' 
+                                              : 'Save',
                                       style: GoogleFonts.mulish(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,

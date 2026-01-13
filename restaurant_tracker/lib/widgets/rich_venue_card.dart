@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../api_service.dart';
+import 'beautiful_snackbar.dart';
 
 /// Helper function to render text with proper emoji support.
 /// Splits text into emoji and non-emoji parts, rendering emojis with system font.
@@ -110,11 +111,14 @@ class _RichVenueCardState extends State<RichVenueCard> {
   final ApiService _apiService = ApiService();
   bool _isLoved = false;
   bool _isCheckingLoved = true;
+  bool _isSeen = false;
+  bool _isCheckingSeen = true;
 
   @override
   void initState() {
     super.initState();
     _checkIfLoved();
+    _checkIfSeen();
   }
 
   Future<void> _checkIfLoved() async {
@@ -155,6 +159,44 @@ class _RichVenueCardState extends State<RichVenueCard> {
     }
   }
 
+  Future<void> _checkIfSeen() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        _isCheckingSeen = false;
+        _isSeen = false;
+      });
+      return;
+    }
+
+    final placeId = widget.venue['place_id']?.toString();
+    if (placeId == null || placeId.isEmpty) {
+      setState(() {
+        _isCheckingSeen = false;
+        _isSeen = false;
+      });
+      return;
+    }
+
+    try {
+      final isSeen = await _apiService.isPlaceSeen(user.uid, placeId);
+      if (mounted) {
+        setState(() {
+          _isSeen = isSeen;
+          _isCheckingSeen = false;
+        });
+      }
+    } catch (e) {
+      print('Error checking if place is seen: $e');
+      if (mounted) {
+        setState(() {
+          _isCheckingSeen = false;
+          _isSeen = false;
+        });
+      }
+    }
+  }
+
   Future<void> _toggleLove() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -172,13 +214,14 @@ class _RichVenueCardState extends State<RichVenueCard> {
       return;
     }
 
+    final wasLoved = _isLoved;
     setState(() {
       _isLoved = !_isLoved; // Optimistic update
     });
 
     try {
       bool success;
-      if (_isLoved) {
+      if (!wasLoved) {
         // Save to loved places
         success = await _apiService.lovePlace(
           userId: user.uid,
@@ -193,24 +236,119 @@ class _RichVenueCardState extends State<RichVenueCard> {
         success = await _apiService.unlovePlace(user.uid, placeId);
       }
 
-      if (!success && mounted) {
-        // Revert on failure
-        setState(() {
-          _isLoved = !_isLoved;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                _isLoved ? 'Failed to save place' : 'Failed to remove place'),
-          ),
-        );
+      if (mounted) {
+        if (success) {
+          // Show success message
+          if (!wasLoved) {
+            BeautifulSnackbar.showSuccess(
+              context,
+              'We saved your place! 💚',
+            );
+          } else {
+            BeautifulSnackbar.showError(
+              context,
+              'Place removed from favorites',
+            );
+          }
+        } else {
+          // Revert on failure
+          setState(() {
+            _isLoved = wasLoved;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  !wasLoved ? 'Failed to save place' : 'Failed to remove place'),
+            ),
+          );
+        }
       }
     } catch (e) {
       print('Error toggling love: $e');
       if (mounted) {
         // Revert on error
         setState(() {
-          _isLoved = !_isLoved;
+          _isLoved = wasLoved;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('An error occurred')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleSeen() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to mark places')),
+      );
+      return;
+    }
+
+    final placeId = widget.venue['place_id']?.toString();
+    if (placeId == null || placeId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Place ID not available')),
+      );
+      return;
+    }
+
+    final wasSeen = _isSeen;
+    setState(() {
+      _isSeen = !_isSeen; // Optimistic update
+    });
+
+    try {
+      bool success;
+      if (!wasSeen) {
+        // Mark as seen
+        success = await _apiService.markPlaceAsSeen(
+          userId: user.uid,
+          placeId: placeId,
+          name: widget.venue['name']?.toString() ?? 'Unknown',
+          rating: (widget.venue['rating'] as num?)?.toDouble(),
+          lat: (widget.venue['latitude'] as num?)?.toDouble(),
+          lng: (widget.venue['longitude'] as num?)?.toDouble(),
+        );
+      } else {
+        // Unmark as seen
+        success = await _apiService.unmarkPlaceAsSeen(user.uid, placeId);
+      }
+
+      if (mounted) {
+        if (success) {
+          // Show success message
+          if (!wasSeen) {
+            BeautifulSnackbar.showSuccess(
+              context,
+              'Marked as seen! 👀',
+            );
+          } else {
+            BeautifulSnackbar.showError(
+              context,
+              'Removed from seen places',
+            );
+          }
+        } else {
+          // Revert on failure
+          setState(() {
+            _isSeen = wasSeen;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  !wasSeen ? 'Failed to mark as seen' : 'Failed to unmark as seen'),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('Error toggling seen: $e');
+      if (mounted) {
+        // Revert on error
+        setState(() {
+          _isSeen = wasSeen;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('An error occurred')),
@@ -312,6 +450,25 @@ class _RichVenueCardState extends State<RichVenueCard> {
                     tooltip: _isLoved
                         ? 'Remove from loved places'
                         : 'Save to loved places',
+                  ),
+                  // Seen button
+                  IconButton(
+                    icon: _isCheckingSeen
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF2D5016),
+                            ),
+                          )
+                        : Icon(
+                            _isSeen ? Icons.visibility : Icons.visibility_outlined,
+                            color: _isSeen ? Colors.blue : Colors.grey[600],
+                            size: 24,
+                          ),
+                    onPressed: _toggleSeen,
+                    tooltip: _isSeen ? 'Mark as unseen' : 'Mark as seen',
                   ),
                   // Rating
                   if (widget.venue['rating'] != null)
@@ -879,6 +1036,25 @@ class _RichVenueCardState extends State<RichVenueCard> {
                 tooltip: _isLoved
                     ? 'Remove from loved places'
                     : 'Save to loved places',
+              ),
+              // Seen button
+              IconButton(
+                icon: _isCheckingSeen
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF2D5016),
+                        ),
+                      )
+                    : Icon(
+                        _isSeen ? Icons.visibility : Icons.visibility_outlined,
+                        color: _isSeen ? Colors.blue : Colors.grey[600],
+                        size: 24,
+                      ),
+                onPressed: _toggleSeen,
+                tooltip: _isSeen ? 'Mark as unseen' : 'Mark as seen',
               ),
             ],
           ),

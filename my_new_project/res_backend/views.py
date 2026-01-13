@@ -4626,6 +4626,57 @@ def mark_venue_interaction(request):
         )
 
 
+@api_view(['DELETE'])
+@permission_classes([])
+def delete_venue_interaction(request):
+    """Delete a venue interaction (unmark as seen/not_interested/loved)"""
+    try:
+        data = request.data
+        user_id = data.get('user_id')
+        place_id = data.get('place_id')
+        interaction_type = data.get('interaction_type')  # 'seen', 'not_interested', 'loved'
+        
+        if not all([user_id, place_id, interaction_type]):
+            return Response(
+                {"error": "Missing required fields: user_id, place_id, interaction_type"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if interaction_type not in ['seen', 'not_interested', 'loved']:
+            return Response(
+                {"error": "interaction_type must be one of: seen, not_interested, loved"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from supabase_config import get_supabase_client
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return Response(
+                {"error": "Database connection not available"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
+        # Delete the specific interaction
+        result = supabase.table('user_venue_interactions')\
+            .delete()\
+            .eq('user_id', user_id)\
+            .eq('place_id', place_id)\
+            .eq('interaction_type', interaction_type)\
+            .execute()
+        
+        return Response({"success": True}, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: delete_venue_interaction endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to delete venue interaction: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 @api_view(['GET'])
 @permission_classes([])
 def get_saved_itineraries(request):

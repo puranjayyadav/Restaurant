@@ -13,9 +13,19 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+import os
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Explicitly load .env from root
+root_env = BASE_DIR.parent / '.env'
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    # Try current directory as well
+    load_dotenv()
 
 
 # Quick-start development settings - unsuitable for production

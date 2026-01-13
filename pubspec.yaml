@@ -87,33 +87,33 @@ flutter:
   fonts:
     - family: SF Pro Display
       fonts:
-        - asset: ../fonts/SFPRODISPLAYREGULAR.otf
+        - asset: fonts/SFPRODISPLAYREGULAR.OTF
           weight: 400
-        - asset: ../fonts/SFPRODISPLAYMEDIUM.otf
+        - asset: fonts/SFPRODISPLAYMEDIUM.OTF
           weight: 500
-        - asset: ../fonts/SFPRODISPLAYBOLD.otf
+        - asset: fonts/SFPRODISPLAYBOLD.OTF
           weight: 700
-        - asset: ../fonts/SFPRODISPLAYSEMIBOLDITALIC.otf
+        - asset: fonts/SFPRODISPLAYSEMIBOLDITALIC.OTF
           weight: 600
           style: italic
-        - asset: ../fonts/SFPRODISPLAYBLACKITALIC.otf
+        - asset: fonts/SFPRODISPLAYBLACKITALIC.OTF
           weight: 900
           style: italic
-        - asset: ../fonts/SFPRODISPLAYHEAVYITALIC.otf
+        - asset: fonts/SFPRODISPLAYHEAVYITALIC.OTF
           weight: 800
           style: italic
-        - asset: ../fonts/SFPRODISPLAYLIGHTITALIC.otf
+        - asset: fonts/SFPRODISPLAYLIGHTITALIC.OTF
           weight: 300
           style: italic
-        - asset: ../fonts/SFPRODISPLAYTHINITALIC.otf
+        - asset: fonts/SFPRODISPLAYTHINITALIC.OTF
           weight: 200
           style: italic
-        - asset: ../fonts/SFPRODISPLAYULTRALIGHTITALIC.otf
+        - asset: fonts/SFPRODISPLAYULTRALIGHTITALIC.OTF
           weight: 100
           style: italic
     - family: MeeraInimai
       fonts:
-        - asset: ../fonts/MeeraInimai-Regular.ttf
+        - asset: fonts/MeeraInimai-Regular.ttf
           weight: 400
 
   # An image asset can refer to one or more resolution-specific "variants", see

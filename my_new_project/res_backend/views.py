@@ -3890,9 +3890,13 @@ def generate_itinerary(request):
         cuisine_preference_min = data.get('cuisine_preference_min')
         cuisine_preference_max = data.get('cuisine_preference_max')
         
+        # Extract user_id for history tracking (optional)
+        user_id = data.get('user_id')
+        
         print(f"DEBUG: Received cuisine_preferences: {cuisine_preferences}")
         print(f"DEBUG: Received cuisine_preference_min: {cuisine_preference_min}")
         print(f"DEBUG: Received cuisine_preference_max: {cuisine_preference_max}")
+        print(f"DEBUG: Received user_id: {user_id}")
         
         # Generate itinerary
         planner = DayPlannerService()
@@ -3905,7 +3909,8 @@ def generate_itinerary(request):
             local_time_start=local_time_start,
             cuisine_preferences=cuisine_preferences,
             cuisine_preference_min=cuisine_preference_min,
-            cuisine_preference_max=cuisine_preference_max
+            cuisine_preference_max=cuisine_preference_max,
+            user_id=user_id
         )
         
         if "error" in result:
@@ -3952,6 +3957,9 @@ def itinerary_details(request):
     """
     try:
         from .day_planner_service import DayPlannerService
+        
+        print(f"DEBUG: itinerary_details called with request method: {request.method}")
+        print(f"DEBUG: Request data: {request.data if hasattr(request, 'data') else request.body}")
         
         data = request.data
         place_ids = data.get('place_ids', [])
@@ -4070,6 +4078,7 @@ def parse_query(request):
     """
     try:
         import requests
+        import json
         from django.conf import settings
         from decouple import config
         
@@ -4089,60 +4098,146 @@ def parse_query(request):
         # Get available vibe slugs from venue_vibes table
         from supabase_config import get_supabase_client
         supabase = get_supabase_client()
-        vibe_slugs = [
-            "romantic", "dinner_date", "speakeasy", "fine_dining",
-            "solo_date", "work_friendly", "coffee", "coffee_run",
-            "dinner_group", "brunch_buzzy", "casual_lunch",
-            "breakfast_classic", "family_friendly", "late_night_eats",
-            "art_house", "new_american_aesthetic", "australian_cafe_aesthetic",
-            "italian_red_sauce_aesthetic", "natural_wine", "pizza_nyc_aesthetic",
-            "french_bistro_aesthetic", "japanese_izakaya_aesthetic", "korean_pocha_aesthetic"
+        
+        # Use complete list of known vibe slugs (cached from database analysis)
+        # This avoids expensive pagination queries on every request (50k+ rows)
+        all_vibe_slugs = [
+            "aesthetic", "art_house", "australian_cafe", "australian_cafe_aesthetic", "bakery_cafe",
+            "board_games", "breakfast_classic", "brunch_buzzy", "caribbean_jamaican", "caribbean_jamaican_aesthetic",
+            "casual_lunch", "chinese_cantonese", "chinese_cantonese_aesthetic", "chinese_sichuan", "chinese_sichuan_aesthetic",
+            "chinese_xian", "chinese_xian_aesthetic", "coffee", "coffee_run", "colombian", "colombian_aesthetic",
+            "dark_academia", "dinner_date", "dinner_group", "dive_bar", "dominican", "dominican_aesthetic",
+            "eastern_european", "eastern_european_aesthetic", "ethiopian", "ethiopian_aesthetic", "fine_dining",
+            "french_bistro", "french_bistro_aesthetic", "greek_taverna", "greek_taverna_aesthetic", "halal_cart",
+            "halal_cart_aesthetic", "indian_north", "indian_north_aesthetic", "indian_south", "indian_south_aesthetic",
+            "italian_red_sauce", "italian_red_sauce_aesthetic", "italian_regional", "italian_regional_aesthetic",
+            "japanese_izakaya", "japanese_izakaya_aesthetic", "japanese_sushi_aesthetic", "jewish_deli",
+            "jewish_deli_aesthetic", "korean_bbq", "korean_bbq_aesthetic", "korean_pocha", "korean_pocha_aesthetic",
+            "late_night_eats", "listening_bar", "mexican_street_aesthetic", "middle_eastern", "middle_eastern_aesthetic",
+            "minimalist", "natural_wine", "new_american", "new_american_aesthetic", "peruvian_aesthetic",
+            "pizza_nyc", "pizza_nyc_aesthetic", "puerto_rican", "puerto_rican_aesthetic", "retro_vintage",
+            "rooftop", "russian", "russian_aesthetic", "senegalese", "senegalese_aesthetic", "solo_date",
+            "soul_food", "soul_food_aesthetic", "speakeasy", "tea_sanctuary", "test_pizza", "thai_isan",
+            "thai_isan_aesthetic", "urban_jungle", "uzbek", "uzbek_aesthetic", "vietnamese", "vietnamese_aesthetic",
+            "work_friendly"
         ]
         
-        # Try to get more vibes from database (optional enhancement)
-        if supabase:
-            try:
-                # Get a sample of distinct vibe slugs
-                result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
-                if result.data:
-                    db_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
-                    vibe_slugs.extend(db_vibes[:30])  # Add up to 30 more
-                    vibe_slugs = list(set(vibe_slugs))  # Remove duplicates
-            except Exception as e:
-                print(f"Could not fetch vibes from DB: {e}")
-                # Use default list above
+        cuisine_groups = {}  # Group cuisine slugs by cuisine type
+        
+        # Group cuisine-related slugs by cuisine type
+        cuisine_keywords = {
+            'indian': ['indian'],
+            'korean': ['korean'],
+            'japanese': ['japanese'],
+            'italian': ['italian'],
+            'chinese': ['chinese'],
+            'thai': ['thai'],
+            'vietnamese': ['vietnamese'],
+            'french': ['french'],
+            'greek': ['greek'],
+            'caribbean': ['caribbean'],
+            'colombian': ['colombian'],
+            'peruvian': ['peruvian'],
+            'russian': ['russian'],
+            'eastern_european': ['eastern_european'],
+            'middle_eastern': ['middle_eastern'],
+            'soul_food': ['soul_food'],
+            'pizza': ['pizza'],
+            'halal': ['halal'],
+            'jewish': ['jewish']
+        }
+        
+        for cuisine_type, keywords in cuisine_keywords.items():
+            cuisine_groups[cuisine_type] = [
+                slug for slug in all_vibe_slugs 
+                if any(kw in slug.lower() for kw in keywords)
+            ]
+        
+        print(f"DEBUG: Using {len(all_vibe_slugs)} cached vibe slugs")
+        print(f"DEBUG: Indian cuisine slugs: {cuisine_groups.get('indian', [])}")
+        
+        # Build cuisine slugs list for LLM prompt
+        cuisine_slugs = []
+        for cuisine_list in cuisine_groups.values():
+            cuisine_slugs.extend(cuisine_list)
+        cuisine_slugs = sorted(list(set(cuisine_slugs)))
+        
+        # Build cuisine mapping rules dynamically
+        cuisine_mapping_rules = []
+        if 'indian' in cuisine_groups and cuisine_groups['indian']:
+            indian_slugs = cuisine_groups['indian']
+            cuisine_mapping_rules.append(f'- "Indian" -> cuisine_preferences: {indian_slugs}')
+        
+        # Add other cuisine mappings
+        cuisine_mappings = {
+            'korean': ['korean_bbq', 'korean_pocha_aesthetic'],
+            'japanese': ['japanese_sushi', 'japanese_izakaya', 'japanese_sushi_aesthetic', 'japanese_izakaya_aesthetic'],
+            'italian': ['italian_red_sauce', 'italian_red_sauce_aesthetic'],
+            'thai': ['thai_isan', 'thai_isan_aesthetic'],
+            'vietnamese': ['vietnamese', 'vietnamese_aesthetic'],
+            'greek': ['greek_taverna', 'greek_taverna_aesthetic'],
+            'caribbean': ['caribbean_jamaican', 'caribbean_jamaican_aesthetic'],
+            'colombian': ['colombian', 'colombian_aesthetic'],
+            'peruvian': ['peruvian_aesthetic'],
+            'pizza': ['pizza_nyc']
+        }
+        
+        for cuisine_type, default_slugs in cuisine_mappings.items():
+            if cuisine_type in cuisine_groups and cuisine_groups[cuisine_type]:
+                actual_slugs = cuisine_groups[cuisine_type]
+                if actual_slugs:
+                    cuisine_mapping_rules.append(f'- "{cuisine_type.capitalize()}" -> cuisine_preferences: {actual_slugs}')
         
         system_prompt = f"""You are a query parser for a day planner app. Extract structured parameters from natural language queries.
 
-Available vibe slugs: {', '.join(vibe_slugs[:30])}
+Available vibe slugs: {', '.join(all_vibe_slugs[:50])}
+Available cuisine slugs: {', '.join(cuisine_slugs[:50])}
 
 IMPORTANT VIBE MAPPING RULES:
-- "romantic", "date night", "date", "romantic dinner" → "dinner_date" (NOT speakeasy, NOT romantic)
-- "speakeasy", "hidden bar", "cocktail bar" → "speakeasy"
-- "coffee", "cafe", "morning coffee" → "coffee" or "coffee_run"
-- "brunch", "breakfast" → "brunch_buzzy" or "breakfast_classic"
-- "fine dining", "upscale", "fancy" → "fine_dining"
-- "solo", "alone", "work" → "solo_date" or "work_friendly"
+- "romantic", "date night", "date", "romantic dinner" -> selected_vibe: "dinner_date", social_context: "couple"
+- "speakeasy", "hidden bar", "cocktail bar" -> selected_vibe: "speakeasy", time_preference: "night"
+- "coffee", "cafe", "morning coffee" -> selected_vibe: "coffee" or "coffee_run"
+- "brunch", "breakfast" -> selected_vibe: "brunch_buzzy" or "breakfast_classic"
+- "fine dining", "upscale", "fancy" -> selected_vibe: "fine_dining"
+- "solo", "alone", "work" -> selected_vibe: "solo_date" or "work_friendly"
+
+IMPORTANT CUISINE MAPPING RULES:
+{chr(10).join(cuisine_mapping_rules)}
+
+CRITICAL: When ANY cuisine is mentioned, you MUST return ALL available slugs for that cuisine type, including both base and aesthetic variants. This applies to ALL cuisines:
+- "Indian" -> return ALL indian-related slugs (e.g., ["indian_north", "indian_north_aesthetic"])
+- "Korean" -> return ALL korean-related slugs (e.g., ["korean_pocha_aesthetic"])
+- "Japanese" -> return ALL japanese-related slugs (e.g., ["japanese_sushi", "japanese_izakaya", "japanese_sushi_aesthetic", "japanese_izakaya_aesthetic"])
+- "Thai" -> return ALL thai-related slugs (e.g., ["thai_isan", "thai_isan_aesthetic"])
+- "Italian" -> return ALL italian-related slugs
+- And so on for ALL cuisines. Always return the complete set of slugs for the mentioned cuisine.
 
 Extract and return ONLY valid JSON with these fields:
 - selected_vibe: vibe_slug that best matches the query (or null)
+- cuisine_preferences: array of ALL cuisine slugs matching the cuisine mentioned (e.g., for "Korean" return ALL korean-related slugs, for "Japanese" return ALL japanese-related slugs) or []
 - social_context: "couple", "solo", "group", or "family" (or null)
 - location_hint: neighborhood or area mentioned (or null)
 - time_preference: "morning", "afternoon", "evening", "night" (or null)
 - parsed_intent: brief summary of what user wants
 
 Examples:
-Query: "romantic dinner date"
-{{"selected_vibe": "dinner_date", "social_context": "couple", "time_preference": "evening", "parsed_intent": "Romantic dinner date"}}
+Query: "romantic Indian dinner"
+{{"selected_vibe": "dinner_date", "cuisine_preferences": {json.dumps(cuisine_groups.get('indian', ['indian_north', 'indian_north_aesthetic']))}, "social_context": "couple", "time_preference": "evening", "parsed_intent": "Romantic Indian dinner"}}
 
-Query: "romantic date night"
-{{"selected_vibe": "dinner_date", "social_context": "couple", "time_preference": "evening", "parsed_intent": "Romantic date night"}}
+Query: "Korean food in Koreatown"
+{{"selected_vibe": null, "cuisine_preferences": {json.dumps(cuisine_groups.get('korean', ['korean_pocha_aesthetic']))}, "social_context": null, "location_hint": "Koreatown", "time_preference": null, "parsed_intent": "Korean food in Koreatown"}}
+
+Query: "Japanese sushi restaurant"
+{{"selected_vibe": null, "cuisine_preferences": {json.dumps(cuisine_groups.get('japanese', ['japanese_sushi', 'japanese_izakaya', 'japanese_sushi_aesthetic', 'japanese_izakaya_aesthetic']))}, "social_context": null, "location_hint": null, "time_preference": null, "parsed_intent": "Japanese sushi restaurant"}}
+
+Query: "Thai food for lunch"
+{{"selected_vibe": "casual_lunch", "cuisine_preferences": {json.dumps(cuisine_groups.get('thai', ['thai_isan', 'thai_isan_aesthetic']))}, "social_context": null, "location_hint": null, "time_preference": "afternoon", "parsed_intent": "Thai food for lunch"}}
+
+Query: "work friendly coffee"
+{{"selected_vibe": "work_friendly", "cuisine_preferences": ["coffee_run"], "social_context": "solo", "time_preference": "morning", "parsed_intent": "Work friendly coffee"}}
 
 Query: "solo coffee morning"
-{{"selected_vibe": "coffee", "social_context": "solo", "time_preference": "morning", "parsed_intent": "Solo coffee morning"}}
-
-Query: "family brunch"
-{{"selected_vibe": "brunch_buzzy", "social_context": "family", "time_preference": "morning", "parsed_intent": "Family brunch"}}
+{{"selected_vibe": "coffee", "cuisine_preferences": [], "social_context": "solo", "time_preference": "morning", "parsed_intent": "Solo coffee morning"}}
 
 Return ONLY the JSON object, no markdown, no explanations."""
         
@@ -4172,8 +4267,59 @@ Return ONLY the JSON object, no markdown, no explanations."""
             elif llm_response.startswith("```"):
                 llm_response = llm_response.split("```")[1].split("```")[0].strip()
             
-            import json
             parsed = json.loads(llm_response)
+            
+            # Post-process: Ensure ALL cuisine slugs are included when ANY cuisine is mentioned
+            query_lower = query.lower()
+            current_cuisine = parsed.get('cuisine_preferences', [])
+            expanded_cuisine = list(current_cuisine)  # Start with existing
+            
+            # Check each cuisine group and expand if mentioned in query or already in preferences
+            for cuisine_type, cuisine_slugs in cuisine_groups.items():
+                if not cuisine_slugs:
+                    continue
+                
+                # Check if this cuisine is mentioned in the query
+                cuisine_keywords = {
+                    'indian': ['indian'],
+                    'korean': ['korean'],
+                    'japanese': ['japanese', 'sushi'],
+                    'italian': ['italian'],
+                    'chinese': ['chinese'],
+                    'thai': ['thai'],
+                    'vietnamese': ['vietnamese'],
+                    'french': ['french'],
+                    'greek': ['greek'],
+                    'caribbean': ['caribbean', 'jamaican'],
+                    'colombian': ['colombian'],
+                    'peruvian': ['peruvian'],
+                    'russian': ['russian'],
+                    'eastern_european': ['eastern european'],
+                    'middle_eastern': ['middle eastern', 'mediterranean'],
+                    'soul_food': ['soul food'],
+                    'pizza': ['pizza'],
+                    'halal': ['halal'],
+                    'jewish': ['jewish', 'deli']
+                }
+                
+                keywords = cuisine_keywords.get(cuisine_type, [cuisine_type])
+                query_mentions_cuisine = any(kw in query_lower for kw in keywords)
+                
+                # Check if any slug from this cuisine group is already in preferences
+                has_cuisine_slug = any(
+                    any(cuisine_keyword in str(c).lower() for cuisine_keyword in keywords)
+                    for c in current_cuisine
+                )
+                
+                # If cuisine is mentioned in query OR already in preferences, add ALL slugs for that cuisine
+                if query_mentions_cuisine or has_cuisine_slug:
+                    expanded_cuisine.extend(cuisine_slugs)
+                    print(f"DEBUG: Expanded cuisine_preferences to include all {cuisine_type} slugs: {cuisine_slugs}")
+            
+            # Remove duplicates and update
+            if expanded_cuisine != current_cuisine:
+                parsed['cuisine_preferences'] = sorted(list(set(expanded_cuisine)))
+                print(f"DEBUG: Final expanded cuisine_preferences: {parsed['cuisine_preferences']}")
             
             # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
             if parsed.get('selected_vibe') is None:
@@ -4209,6 +4355,7 @@ Return ONLY the JSON object, no markdown, no explanations."""
             query_lower = query.lower()
             result = {
                 "selected_vibe": None,
+                "cuisine_preferences": [],
                 "social_context": None,
                 "location_hint": None,
                 "time_preference": None,
@@ -4229,6 +4376,29 @@ Return ONLY the JSON object, no markdown, no explanations."""
                 result["time_preference"] = "morning"
             elif any(word in query_lower for word in ["group", "friends", "party"]):
                 result["social_context"] = "group"
+            
+            # Cuisine matching
+            if any(word in query_lower for word in ["indian", "curry", "tandoori", "naan"]):
+                result["cuisine_preferences"] = ["indian_north", "indian_south"]
+            elif any(word in query_lower for word in ["korean", "bbq", "bulgogi", "galbi"]):
+                result["cuisine_preferences"] = ["korean_bbq"]
+            elif any(word in query_lower for word in ["japanese", "sushi", "ramen", "izakaya"]):
+                result["cuisine_preferences"] = ["japanese_sushi", "japanese_izakaya"]
+            elif any(word in query_lower for word in ["italian", "pasta", "pizza"]):
+                if "pizza" in query_lower:
+                    result["cuisine_preferences"] = ["pizza_nyc"]
+                else:
+                    result["cuisine_preferences"] = ["italian_red_sauce", "italian_regional"]
+            elif any(word in query_lower for word in ["mexican", "taco", "burrito"]):
+                result["cuisine_preferences"] = ["mexican_street"]
+            elif any(word in query_lower for word in ["chinese", "dim sum", "sichuan"]):
+                result["cuisine_preferences"] = ["chinese_sichuan", "chinese_cantonese"]
+            elif any(word in query_lower for word in ["thai"]):
+                result["cuisine_preferences"] = ["thai_isan"]
+            elif any(word in query_lower for word in ["vietnamese", "pho", "banh mi"]):
+                result["cuisine_preferences"] = ["vietnamese"]
+            elif any(word in query_lower for word in ["french", "bistro"]):
+                result["cuisine_preferences"] = ["french_bistro"]
             
             # Time preference
             if any(word in query_lower for word in ["morning", "breakfast", "coffee"]):
@@ -4273,5 +4443,232 @@ Return ONLY the JSON object, no markdown, no explanations."""
         print(f"ERROR: {traceback.format_exc()}")
         return Response(
             {"error": f"Failed to parse query: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def search_venues(request):
+    """
+    Search for venues in the Supabase database.
+    Searches across name, address, street_address, and city fields.
+    
+    Query parameters:
+        - q: Search query string (required)
+        - limit: Maximum number of results (default: 50)
+    """
+    try:
+        query = request.GET.get('q', '').strip()
+        limit = int(request.GET.get('limit', 50))
+        
+        if not query:
+            return Response(
+                {"error": "Search query 'q' parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from supabase_config import get_supabase_client
+            supabase = get_supabase_client()
+            
+            if not supabase:
+                return Response(
+                    {"error": "Supabase client not available"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+        except ImportError:
+            return Response(
+                {"error": "Supabase configuration not found"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        response = (
+            supabase.table('venues')
+            .select('*')
+            .or_(f"name.ilike.%{query}%,address.ilike.%{query}%,street_address.ilike.%{query}%,city.ilike.%{query}%")
+            .order('rating', desc=True)
+            .limit(limit)
+            .execute()
+        )
+        
+        venues = response.data if response.data else []
+        
+        print(f"DEBUG: Venue search for '{query}' returned {len(venues)} results")
+        
+        return Response({
+            "query": query,
+            "count": len(venues),
+            "venues": venues
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: Venue search failed: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Search failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def save_itinerary(request):
+    """
+    Save an itinerary to the saved_lists table.
+    
+    POST body:
+    {
+        "user_id": "firebase_user_id",
+        "title": "My Day in NYC",
+        "subtitle": "A Morning in the West Village",
+        "description": "An experience curated just for you...",
+        "itinerary_data": { ... full itinerary JSON ... }
+    }
+    """
+    try:
+        from supabase_config import get_supabase_client
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return Response(
+                {"error": "Supabase client not available"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
+        data = request.data
+        user_id = data.get('user_id')
+        title = data.get('title', 'Saved Itinerary')
+        subtitle = data.get('subtitle', '')
+        description = data.get('description', '')
+        itinerary_data = data.get('itinerary_data', {})
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not itinerary_data:
+            return Response(
+                {"error": "itinerary_data is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Insert into saved_lists
+        result = supabase.table('saved_lists').insert({
+            'user_id': user_id,
+            'title': title,
+            'subtitle': subtitle,
+            'description': description,
+            'itinerary_data': itinerary_data
+        }).execute()
+        
+        if result.data:
+            print(f"DEBUG: Saved itinerary for user {user_id}: {title}")
+            return Response({
+                "success": True,
+                "id": result.data[0].get('id'),
+                "message": "Itinerary saved successfully"
+            }, status=status.HTTP_201_CREATED)
+        else:
+            return Response(
+                {"error": "Failed to save itinerary"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+    except Exception as e:
+        import traceback
+        print(f"ERROR: Save itinerary failed: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Save failed: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([])
+def mark_venue_interaction(request):
+    """Mark a venue as seen/not_interested/loved"""
+    try:
+        data = request.data
+        user_id = data.get('user_id')
+        place_id = data.get('place_id')
+        interaction_type = data.get('interaction_type')  # 'seen', 'not_interested', 'loved'
+        
+        if not all([user_id, place_id, interaction_type]):
+            return Response(
+                {"error": "Missing required fields: user_id, place_id, interaction_type"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if interaction_type not in ['seen', 'not_interested', 'loved']:
+            return Response(
+                {"error": "interaction_type must be one of: seen, not_interested, loved"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from .user_history_service import UserHistoryService
+        history_service = UserHistoryService()
+        history_service.mark_venue_interaction(user_id, place_id, interaction_type)
+        
+        return Response({"success": True}, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: mark_venue_interaction endpoint error: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Failed to mark venue interaction: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def get_saved_itineraries(request):
+    """
+    Get all saved itineraries for a user.
+    
+    Query parameters:
+        - user_id: Firebase user ID (required)
+    """
+    try:
+        from supabase_config import get_supabase_client
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return Response(
+                {"error": "Supabase client not available"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        
+        user_id = request.GET.get('user_id')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        result = supabase.table('saved_lists').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+        
+        itineraries = result.data if result.data else []
+        
+        print(f"DEBUG: Retrieved {len(itineraries)} saved itineraries for user {user_id}")
+        
+        return Response({
+            "count": len(itineraries),
+            "itineraries": itineraries
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        import traceback
+        print(f"ERROR: Get saved itineraries failed: {str(e)}")
+        print(f"ERROR: {traceback.format_exc()}")
+        return Response(
+            {"error": f"Fetch failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

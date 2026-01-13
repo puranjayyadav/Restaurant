@@ -10,7 +10,8 @@ from .views import (
     generate_and_enrich_itinerary, get_pre_created_itineraries, 
     pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
     next_best_action, create_itinerary_skeleton, get_address_suggestions_view,
-    get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query, geocode_location
+    get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query, geocode_location,
+    search_venues, save_itinerary, get_saved_itineraries, mark_venue_interaction
 )
 from .density_heatmap import get_density_heatmap
 try:
@@ -71,7 +72,7 @@ urlpatterns = [
     
     # Lemon8 endpoints (only if module is available)
     *([path('lemon8/sql-extract/', lemon8_api.sql_extract_view, name='lemon8-sql-extract'),
-       path('lemon8/semantic-search/', lemon8_api.semantic_search_view, name='lemon8-semantic-search'),
+    path('lemon8/semantic-search/', lemon8_api.semantic_search_view, name='lemon8-semantic-search'),
        path('generate-itinerary/', lemon8_api.unified_generate_itinerary_view, name='generate-itinerary')] if lemon8_api else []),
     
     # Centralized Day Planner API endpoints
@@ -79,4 +80,10 @@ urlpatterns = [
     path('api/parse-query/', parse_query, name='api-parse-query'),
     path('api/generate-itinerary/', generate_itinerary, name='api-generate-itinerary'),
     path('api/itinerary-details/', itinerary_details, name='api-itinerary-details'),
+    path('search-venues/', search_venues, name='api-search-venues'),
+    # Saved Itineraries endpoints
+    path('api/save-itinerary/', save_itinerary, name='api-save-itinerary'),
+    path('api/saved-itineraries/', get_saved_itineraries, name='api-saved-itineraries'),
+    # User History endpoints
+    path('api/mark-venue-interaction/', mark_venue_interaction, name='api-mark-venue-interaction'),
 ]

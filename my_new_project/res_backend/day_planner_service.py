@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from supabase_config import get_supabase_client
 from .utils import haversine_distance
+from .hybrid_search_service import HybridSearchService
 
 
 class TimeSlotEngine:
@@ -82,6 +83,38 @@ class DayPlannerService:
     }
     NYC_CENTER = (40.7128, -74.0060)  # Manhattan center (fallback)
     
+    # STRICT chain blacklist - exclude all recognizable chains
+    CHAIN_BLACKLIST = [
+        # Coffee chains
+        'starbucks', 'dunkin', 'dunkin donuts', 'tim hortons', 'peet\'s coffee',
+        'caribou coffee', 'costa coffee', 'the coffee bean',
+        
+        # Fast food
+        'mcdonald\'s', 'mcdonalds', 'burger king', 'wendy\'s', 'wendys',
+        'taco bell', 'kfc', 'popeyes', 'chick-fil-a', 'chipotle',
+        'panera bread', 'subway', 'jimmy john\'s', 'jersey mike\'s',
+        'five guys', 'shake shack', 'in-n-out', 'whataburger',
+        
+        # Casual dining chains
+        'applebee\'s', 'chili\'s', 'olive garden', 'red lobster',
+        'outback steakhouse', 'texas roadhouse', 'buffalo wild wings',
+        'cheesecake factory', 'p.f. chang\'s',
+        
+        # Pizza chains
+        'domino\'s', 'pizza hut', 'papa john\'s', 'little caesars',
+        
+        # Existing exclusions (keep these)
+        'grocery', 'market', 'pharmacy', 'gas station', 'convenience',
+        'dollar store', 'supermarket', 'warehouse', 'wholesale',
+        'bank', 'atm', 'insurance', 'dentist', 'doctor', 'clinic',
+        'post office', 'ups store', 'fedex', 'dry cleaner',
+        'target', 'walmart', 'costco', 'sam\'s club', 'home depot', 'lowes',
+        'lumber', 'hardware', 'drug store', 'auto', 'car wash', 'mechanic',
+        'repair', 'tire', 'credit union', 'real estate', 'lawyer',
+        'hospital', 'veterinary', 'vet', 'shipping', 'laundromat',
+        'storage', 'moving', 'furniture store'
+    ]
+    
     # Curated list of NYC neighborhoods/areas with good venue coverage
     # These are known areas where we have substantial venue data
     NYC_VENUE_RICH_LOCATIONS = [
@@ -153,7 +186,7 @@ class DayPlannerService:
         
         return randomized_lat, randomized_lon
     
-    def _add_random_offset(self, lat: float, lon: float, min_distance_m: int = 500, max_distance_m: int = 2000) -> Tuple[float, float]:
+    def _add_random_offset(self, lat: float, lon: float, min_distance_m: int = 100, max_distance_m: int = 400) -> Tuple[float, float]:
         """
         Add a random offset to coordinates (same logic as geocode-location).
         This provides variety when the same location is used multiple times.
@@ -200,7 +233,8 @@ class DayPlannerService:
         local_time_start: str = "10:00",
         cuisine_preferences: Optional[List[str]] = None,
         cuisine_preference_min: Optional[int] = None,
-        cuisine_preference_max: Optional[int] = None
+        cuisine_preference_max: Optional[int] = None,
+        user_id: Optional[str] = None
     ) -> Dict:
         """
         Generate a full-day itinerary
@@ -218,6 +252,15 @@ class DayPlannerService:
         """
         if not self.supabase:
             return {"error": "Supabase client not available"}
+        
+        # Get user's excluded venues from history
+        excluded_from_history = []
+        history_service = None
+        if user_id:
+            from .user_history_service import UserHistoryService
+            history_service = UserHistoryService()
+            excluded_from_history = history_service.get_excluded_place_ids(user_id, days_back=30)
+            print(f"DEBUG: Excluding {len(excluded_from_history)} venues from user history")
         
         # Parse start time
         try:
@@ -325,13 +368,15 @@ class DayPlannerService:
                 start_lat, start_long, radius_meters, final_vibe,
                 cuisine_preferences=cuisine_preferences,
                 cuisine_preference_min=cuisine_preference_min,
-                cuisine_preference_max=cuisine_preference_max
+                cuisine_preference_max=cuisine_preference_max,
+                excluded_place_ids=excluded_from_history
             )
             
             # Inject hidden gems (1-2 entries) that match filters
             hidden_gems = self._fetch_hidden_gems(
                 start_lat, start_long, radius_meters, final_vibe,
-                cuisine_preferences=cuisine_preferences
+                cuisine_preferences=cuisine_preferences,
+                excluded_place_ids=excluded_from_history
             )
             gems_injected = min(2, len(hidden_gems))
             
@@ -453,6 +498,24 @@ class DayPlannerService:
         # Generate narrative
         narrative = self._generate_narrative(itinerary, selected_vibe, social_context)
         
+        # Save itinerary to user history
+        if user_id and history_service and itinerary:
+            import uuid
+            place_ids = [stop.get('place_id') for stop in itinerary if stop.get('place_id')]
+            if place_ids:
+                history_service.save_itinerary_history(
+                    user_id=user_id,
+                    itinerary_id=str(uuid.uuid4()),
+                    place_ids=place_ids,
+                    filters={
+                        'cuisine': cuisine_preferences,
+                        'vibe': selected_vibe,
+                        'social_context': social_context,
+                        'radius': radius_meters
+                    }
+                )
+                print(f"DEBUG: Saved {len(place_ids)} venues to user history")
+        
         return {
             "itinerary": itinerary,
             "hidden_gems_injected": gems_injected,
@@ -468,190 +531,166 @@ class DayPlannerService:
         vibe_slug: Optional[str] = None,
         cuisine_preferences: Optional[List[str]] = None,
         cuisine_preference_min: Optional[int] = None,
-        cuisine_preference_max: Optional[int] = None
+        cuisine_preference_max: Optional[int] = None,
+        excluded_place_ids: Optional[List[str]] = None
     ) -> List[Dict]:
-        """Fetch venues from venues table, optionally filtered by vibe"""
+        """Fetch venues using hybrid search (semantic + vibe + insights)."""
         try:
-            # Build place_ids list from vibe and/or cuisine preferences
-            place_ids = None
-            vibe_place_ids = set()
-            cuisine_place_ids = set()
-            
-            # If vibe is specified, get place_ids from venue_vibes
+            # Build search query from vibe and cuisine
+            query_parts = []
             if vibe_slug:
-                vibe_query = self.supabase.table("venue_vibes").select("place_id").eq("vibe_slug", vibe_slug).limit(1000)
-                vibe_result = vibe_query.execute()
-                
-                if vibe_result.data:
-                    vibe_place_ids = {v["place_id"] for v in vibe_result.data if v.get("place_id")}
-                    print(f"DEBUG: Found {len(vibe_place_ids)} venues with vibe {vibe_slug}")
+                vibe_mapping = {
+                    "dinner_date": "romantic dinner restaurant candlelit cozy atmosphere",
+                    "work_friendly": "laptop friendly coffee shop wifi outlets",
+                    "coffee_run": "specialty coffee roasters espresso bar",
+                    "speakeasy": "hidden speakeasy bar entrance behind bookshelf",
+                    "brunch_buzzy": "popular brunch spot avocado toast bottomless mimosas",
+                    "casual_lunch": "casual lunch spot sandwiches salads fast casual",
+                    "fine_dining": "upscale fine dining tasting menu michelin guide",
+                    "solo_date": "restaurant with bar seating for solo dining",
+                    "breakfast_classic": "classic breakfast diner pancakes eggs bacon",
+                    "late_night_eats": "late night food open late pizza tacos burgers",
+                }
+                query_parts.append(vibe_mapping.get(vibe_slug, vibe_slug))
             
-            # If cuisine preferences are specified, get place_ids for those vibes
             if cuisine_preferences:
-                print(f"DEBUG: Filtering by cuisine preferences: {cuisine_preferences}")
-                for cuisine_vibe in cuisine_preferences:
-                    try:
-                        cuisine_query = self.supabase.table("venue_vibes").select("place_id").eq("vibe_slug", cuisine_vibe).limit(500)
-                        cuisine_result = cuisine_query.execute()
-                        if cuisine_result.data:
-                            for v in cuisine_result.data:
-                                if v.get("place_id"):
-                                    cuisine_place_ids.add(v["place_id"])
-                            print(f"DEBUG: Found {len(cuisine_result.data)} venues with cuisine vibe {cuisine_vibe}")
-                    except Exception as e:
-                        print(f"Error fetching cuisine {cuisine_vibe}: {e}")
-                        continue
-                
-                print(f"DEBUG: Total cuisine place_ids: {len(cuisine_place_ids)}")
+                cuisine_mapping = {
+                    "indian_north": "butter chicken tandoori naan Indian",
+                    "indian_south": "dosa idli sambar vegetarian spicy chettinad",
+                    "korean_bbq": "korean bbq galbi bulgogi ktown",
+                    "japanese_sushi": "sushi omakase fresh fish",
+                    "japanese_izakaya": "yakitori skewers ramen small plates sake",
+                    "chinese_sichuan": "ma la peppercorn mapo tofu spicy",
+                    "italian_red_sauce": "italian american chicken parm meatballs",
+                    "mexican_street": "tacos al pastor street cart elote",
+                    "vietnamese": "pho beef noodle soup banh mi",
+                    "thai_isan": "northeast thai spicy papaya salad larb",
+                    "french_bistro": "steak frites onion soup escargots",
+                    "pizza_nyc": "classic new york slice thin crust coal oven",
+                }
+                for cuisine in cuisine_preferences:
+                    query_parts.append(cuisine_mapping.get(cuisine, cuisine))
             
-            # Determine final place_ids set
-            if vibe_place_ids and cuisine_place_ids:
-                # Try intersection first (venues with both vibe AND cuisine)
-                intersection = vibe_place_ids.intersection(cuisine_place_ids)
-                print(f"DEBUG: Intersection of vibe ({len(vibe_place_ids)}) and cuisine ({len(cuisine_place_ids)}): {len(intersection)} venues")
-                
-                if len(intersection) >= 10:  # If we have enough venues with both, use intersection
-                    place_ids = list(intersection)
-                    print(f"DEBUG: Using intersection (venues with both vibe and cuisine)")
-                else:
-                    # Not enough venues with both - use cuisine as priority, but include vibe venues as fallback
-                    # Union: prioritize cuisine matches, but include vibe matches too
-                    place_ids = list(cuisine_place_ids.union(vibe_place_ids))
-                    print(f"DEBUG: Using union (cuisine + vibe) - {len(place_ids)} venues. Will score by cuisine match.")
-            elif vibe_place_ids:
-                place_ids = list(vibe_place_ids)
-                print(f"DEBUG: Using vibe filter only: {len(place_ids)} venues")
-            elif cuisine_place_ids:
-                place_ids = list(cuisine_place_ids)
-                print(f"DEBUG: Using cuisine filter only: {len(place_ids)} venues")
-            else:
-                # No filters - fetch all venues (will be filtered by distance/quality)
-                place_ids = None
-                print(f"DEBUG: No vibe or cuisine filters - fetching all venues")
+            search_query = " ".join(query_parts) if query_parts else "great restaurants"
             
-            # Fetch venues - use PostGIS spatial query if available, otherwise fetch and filter
-            # For now, fetch a reasonable set and filter in Python
-            if place_ids:
-                # Fetch venues matching the vibe
-                venues = []
-                # Process in batches to avoid query size limits
-                batch_size = 100
-                for i in range(0, min(len(place_ids), 500), batch_size):
-                    batch_ids = place_ids[i:i+batch_size]
-                    try:
-                        # Use .in_() method - if it doesn't work, we'll filter manually
-                        result = self.supabase.table("venues").select("*").in_("place_id", batch_ids).execute()
-                        if result.data:
-                            venues.extend(result.data)
-                    except:
-                        # Fallback: fetch all and filter
-                        result = self.supabase.table("venues").select("*").limit(1000).execute()
-                        if result.data:
-                            venues.extend([v for v in result.data if v.get("place_id") in batch_ids])
-            else:
-                # No vibe filter - fetch all venues
-                result = self.supabase.table("venues").select("*").limit(1000).execute()
-                venues = result.data if result.data else []
+            # Perform hybrid search
+            hybrid_service = HybridSearchService()
+            results = hybrid_service.search(
+                query=search_query,
+                vibe_slugs=[vibe_slug] if vibe_slug else [],
+                cuisine_slugs=cuisine_preferences or [],
+                lat=lat,
+                lng=lon,
+                radius_km=radius_meters / 1000.0,
+                limit=100
+            )
             
-            # Filter by distance and quality
+            # Convert hybrid search results to venue format
             filtered_venues = []
-            excluded_keywords = [
-                'grocery', 'market', 'lumber', 'hardware', 'pharmacy', 'drug store',
-                'gas station', 'convenience', 'dollar store', 'supermarket', 'warehouse',
-                'wholesale', 'auto', 'car wash', 'mechanic', 'repair', 'tire',
-                'bank', 'atm', 'credit union', 'insurance', 'real estate', 'lawyer',
-                'dentist', 'doctor', 'clinic', 'hospital', 'veterinary', 'vet',
-                'post office', 'ups store', 'fedex', 'shipping', 'dry cleaner',
-                'laundromat', 'storage', 'moving', 'furniture store', 'home depot',
-                'lowes', 'target', 'walmart', 'costco', 'sam\'s club'
-            ]
+            excluded_set = set(excluded_place_ids) if excluded_place_ids else set()
             
-            for venue in venues:
-                if venue.get("latitude") and venue.get("longitude"):
+            for result in results:
+                # Exclude venues from user history
+                place_id = result.get("place_id")
+                if place_id and place_id in excluded_set:
+                    continue
+                
+                # Quality filters - use comprehensive chain blacklist
+                name_lower = (result.get("name") or "").lower()
+                if any(keyword in name_lower for keyword in self.CHAIN_BLACKLIST):
+                    continue
+                
+                # Minimum rating filter
+                rating = result.get("rating") or 0
+                if rating < 4.0:
+                    continue
+                
+                # Calculate distance
+                if result.get("latitude") and result.get("longitude"):
                     try:
-                        # Quality filters
-                        name_lower = (venue.get("name") or "").lower()
-                        
-                        # Exclude non-restaurant venues
-                        if any(keyword in name_lower for keyword in excluded_keywords):
-                            continue
-                        
-                        # Minimum rating filter (4.0+ for quality)
-                        rating = venue.get("rating") or 0
-                        if rating < 4.0:
-                            continue
-                        
-                        dist = haversine_distance(lat, lon, float(venue["latitude"]), float(venue["longitude"]))
+                        dist = haversine_distance(lat, lon, float(result["latitude"]), float(result["longitude"]))
                         if dist <= radius_meters:
-                            venue["distance_m"] = dist
+                            venue = {
+                                "place_id": result.get("place_id"),
+                                "name": result.get("name"),
+                                "address": result.get("address"),
+                                "latitude": result.get("latitude"),
+                                "longitude": result.get("longitude"),
+                                "rating": result.get("rating"),
+                                "review_count": result.get("review_count"),
+                                "distance_m": dist,
+                                "semantic_score": result.get("semantic_score", 0.0),
+                                "vibe_match_score": result.get("vibe_match_score", 0.0),
+                                "insight_score": result.get("insight_score", 0.0),
+                                "final_score": result.get("final_score", 0.0),
+                                "matched_vibes": result.get("matched_vibes", []),
+                            }
+                            
+                            # Add cuisine match scoring
+                            if cuisine_preferences:
+                                matched_vibes = set(result.get("matched_vibes", []))
+                                cuisine_set = set(cuisine_preferences)
+                                matches = cuisine_set.intersection(matched_vibes)
+                                venue['cuisine_match_score'] = len(matches)
+                                venue['has_cuisine_match'] = len(matches) > 0
+                                venue['cuisine_matches'] = list(matches)
+                            else:
+                                venue['cuisine_match_score'] = 0
+                                venue['has_cuisine_match'] = False
+                            
                             filtered_venues.append(venue)
                     except (ValueError, TypeError):
-                        continue  # Skip venues with invalid coordinates
+                        continue
             
-            # Score venues based on cuisine preference matches
-            if cuisine_preferences and filtered_venues:
-                cuisine_set = set(cuisine_preferences)
-                venue_place_ids = [v.get("place_id") for v in filtered_venues if v.get("place_id")]
-                
-                # Initialize scores
-                for venue in filtered_venues:
-                    venue['cuisine_match_score'] = 0
-                    venue['has_cuisine_match'] = False
-                
-                # Re-fetch venue_vibes for filtered venues to check cuisine matches
-                if venue_place_ids:
-                    try:
-                        # Process in batches
-                        batch_size = 200
-                        venue_vibes_map = {}
-                        for i in range(0, len(venue_place_ids), batch_size):
-                            batch_ids = venue_place_ids[i:i+batch_size]
-                            venue_vibes_result = self.supabase.table("venue_vibes").select("place_id, vibe_slug").in_("place_id", batch_ids).execute()
-                            if venue_vibes_result.data:
-                                for vv in venue_vibes_result.data:
-                                    place_id = vv.get("place_id")
-                                    vibe_slug = vv.get("vibe_slug")
-                                    if place_id:
-                                        if place_id not in venue_vibes_map:
-                                            venue_vibes_map[place_id] = []
-                                        venue_vibes_map[place_id].append(vibe_slug)
-                        
-                        # Score venues based on cuisine matches
-                        for venue in filtered_venues:
-                            place_id = venue.get("place_id")
-                            venue_vibes = venue_vibes_map.get(place_id, [])
-                            matches = cuisine_set.intersection(set(venue_vibes))
-                            venue['cuisine_match_score'] = len(matches)
-                            venue['has_cuisine_match'] = len(matches) > 0
-                            venue['cuisine_matches'] = list(matches)
-                            
-                    except Exception as e:
-                        print(f"Error fetching venue vibes for cuisine matching: {e}")
+            # Add randomization for variety - shuffle within quality groups
+            # Separate into cuisine-matching and non-matching
+            cuisine_matching = [v for v in filtered_venues if v.get("has_cuisine_match", False)]
+            non_matching = [v for v in filtered_venues if not v.get("has_cuisine_match", False)]
             
-            # Sort by cuisine match (prioritize venues with cuisine matches), then rating, then distance
-            filtered_venues.sort(key=lambda v: (
-                -(1 if v.get("has_cuisine_match", False) else 0),  # Cuisine matches first
-                -(v.get("cuisine_match_score", 0)),  # More cuisine matches better
-                -(v.get("rating") or 0),  # Higher rating first
-                v.get("distance_m", 999999)  # Closer first
+            # Shuffle both groups for variety
+            random.shuffle(cuisine_matching)
+            random.shuffle(non_matching)
+            
+            # Within cuisine-matching, sort by cuisine score (higher = better match)
+            # but add small random factor to prevent same order every time
+            for v in cuisine_matching:
+                v['_random_factor'] = random.random() * 0.3  # Small random boost
+            
+            cuisine_matching.sort(key=lambda v: (
+                -(v.get("cuisine_match_score", 0) + v['_random_factor']),  # Cuisine match + random
+                -(v.get("rating") or 0)  # Higher rating
             ))
             
-            # Filter by cuisine preference min/max if specified (but don't exclude all if no matches)
+            # Within non-matching, sort by rating with random factor
+            for v in non_matching:
+                v['_random_factor'] = random.random() * 0.5
+            
+            non_matching.sort(key=lambda v: (
+                -((v.get("rating") or 0) + v['_random_factor'])
+            ))
+            
+            # Combine: cuisine-matching venues first (for filter priority), then others
+            # This ensures majority of selected venues match the cuisine filter
+            filtered_venues = cuisine_matching + non_matching
+            
+            # Clean up temporary field
+            for v in filtered_venues:
+                v.pop('_random_factor', None)
+            
+            # Apply cuisine preference limits
             if cuisine_preferences and cuisine_preference_min is not None and len(filtered_venues) > 0:
-                # Only apply min filter if we have enough venues that match
                 matching_venues = [v for v in filtered_venues if v.get("cuisine_match_score", 0) >= cuisine_preference_min]
-                if len(matching_venues) >= 3:  # If we have at least 3 matching venues, use them
+                if len(matching_venues) >= 3:
                     filtered_venues = matching_venues
-                # Otherwise, keep all venues but prioritize matches (already sorted above)
             
             if cuisine_preferences and cuisine_preference_max is not None:
-                # Keep venues with at most max cuisine matches
                 filtered_venues = [v for v in filtered_venues if v.get("cuisine_match_score", 0) <= cuisine_preference_max]
             
+            print(f"DEBUG: Returning {len(filtered_venues)} venues ({len(cuisine_matching)} cuisine-match, {len(non_matching)} diverse)")
             return filtered_venues[:100]  # Return top 100 for selection
             
         except Exception as e:
-            print(f"Error fetching venues: {e}")
+            print(f"Error fetching venues with hybrid search: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -662,7 +701,8 @@ class DayPlannerService:
         lon: float,
         radius_meters: int,
         vibe_slug: Optional[str] = None,
-        cuisine_preferences: Optional[List[str]] = None
+        cuisine_preferences: Optional[List[str]] = None,
+        excluded_place_ids: Optional[List[str]] = None
     ) -> List[Dict]:
         """Fetch 1-2 hidden gems from hidden_gems_v2"""
         try:
@@ -681,18 +721,19 @@ class DayPlannerService:
             gems = result.data if result.data else []
             
             # Filter by distance and quality
-            excluded_keywords = [
-                'grocery', 'market', 'lumber', 'hardware', 'pharmacy', 'drug store',
-                'gas station', 'convenience', 'dollar store', 'supermarket', 'warehouse'
-            ]
-            
             filtered_gems = []
+            excluded_set = set(excluded_place_ids) if excluded_place_ids else set()
             for gem in gems:
                 if gem.get("latitude") and gem.get("longitude"):
                     try:
-                        # Quality filters
+                        # Exclude venues from user history
+                        place_id = gem.get("place_id")
+                        if place_id and place_id in excluded_set:
+                            continue
+                        
+                        # Quality filters - use comprehensive chain blacklist
                         name_lower = (gem.get("name") or "").lower()
-                        if any(keyword in name_lower for keyword in excluded_keywords):
+                        if any(keyword in name_lower for keyword in self.CHAIN_BLACKLIST):
                             continue
                         
                         # Minimum rating filter
@@ -785,11 +826,6 @@ class DayPlannerService:
             
             # Filter by distance and quality
             filtered_venues = []
-            excluded_keywords = [
-                'grocery', 'market', 'lumber', 'hardware', 'pharmacy', 'drug store',
-                'gas station', 'convenience', 'dollar store', 'supermarket', 'warehouse'
-            ]
-            
             for venue in venues:
                 if venue.get("latitude") and venue.get("longitude"):
                     try:
@@ -797,8 +833,9 @@ class DayPlannerService:
                         if place_id in exclude_set:
                             continue
                         
+                        # Quality filters - use comprehensive chain blacklist
                         name_lower = (venue.get("name") or "").lower()
-                        if any(keyword in name_lower for keyword in excluded_keywords):
+                        if any(keyword in name_lower for keyword in self.CHAIN_BLACKLIST):
                             continue
                         
                         rating = venue.get("rating") or 0
@@ -812,11 +849,15 @@ class DayPlannerService:
                     except (ValueError, TypeError):
                         continue
             
-            # Sort by rating and distance
+            # Shuffle for variety, then sort by rating with random factor
+            random.shuffle(filtered_venues)
+            for v in filtered_venues:
+                v['_random_factor'] = random.random() * 0.5
             filtered_venues.sort(key=lambda v: (
-                -(v.get("rating") or 0),
-                v.get("distance_m", 999999)
+                -((v.get("rating") or 0) + v['_random_factor'])
             ))
+            for v in filtered_venues:
+                v.pop('_random_factor', None)
             
             return filtered_venues[:10]  # Return top 10 for selection
             
@@ -901,8 +942,13 @@ class DayPlannerService:
                     "is_hidden_gem": venue.get("is_hidden_gem", False),
                     "latitude": float(venue.get("latitude", 0)),
                     "longitude": float(venue.get("longitude", 0)),
+                    "rating": venue.get("rating") or 0,
+                    "review_count": venue.get("review_count") or 0,
+                    "address": venue.get("address"),
                     "phone": venue.get("phone"),
-                    "website": venue.get("website")
+                    "website": venue.get("website"),
+                    "cuisine_match_score": venue.get("cuisine_match_score", 0),
+                    "matched_vibes": venue.get("matched_vibes", [])
                 })
                 
                 used_place_ids.add(place_id)
@@ -972,13 +1018,21 @@ class DayPlannerService:
         # Sort by score
         candidates.sort(key=lambda x: -x[0])
         
-        # Return top candidate within reasonable distance (1km)
-        for score, venue, dist in candidates:
-            if dist <= 1000:
-                return venue
+        # Filter to candidates within reasonable distance (1.5km)
+        nearby_candidates = [(s, v, d) for s, v, d in candidates if d <= 1500]
+        if not nearby_candidates:
+            nearby_candidates = candidates[:5]  # Fall back to top 5 if none nearby
         
-        # If none within 1km, return top candidate anyway
-        return candidates[0][1] if candidates else None
+        # Randomly select from top candidates for variety
+        # Weight selection towards higher scores but still random
+        if len(nearby_candidates) > 1:
+            # Select from top 3-5 candidates with weighted probability
+            top_n = min(5, len(nearby_candidates))
+            weights = [1.0 / (i + 1) for i in range(top_n)]  # [1.0, 0.5, 0.33, 0.25, 0.2]
+            selected_idx = random.choices(range(top_n), weights=weights, k=1)[0]
+            return nearby_candidates[selected_idx][1]
+        
+        return nearby_candidates[0][1] if nearby_candidates else None
     
     def _calculate_vibe_match(self, venue: Dict, slot_name: str) -> float:
         """Calculate how well venue matches the slot vibe"""

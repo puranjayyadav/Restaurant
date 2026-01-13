@@ -1,0 +1,7 @@
+# Django project package
+
+
+
+
+
+

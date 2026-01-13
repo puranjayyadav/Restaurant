@@ -1,0 +1,689 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // For Firestore queries
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:location/location.dart' as loc;
+import 'package:geocoding/geocoding.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+
+const String _appFontFamily = 'SF Pro Display';
+
+// ----- API SERVICE -----
+// (In your project, move this to its own file, e.g., api_service.dart)
+class ApiService {
+  Future<List<dynamic>> fetchNearbyPlaces(double lat, double lon) async {
+    // Return a dummy list of places for now.
+    return [];
+  }
+}
+
+// ----- FIREBASE SERVICE -----
+// (In your project, move this to its own file, e.g., firebase_service.dart)
+class FirebaseService {
+  // Create a session document in the "sessions" collection and return its ID.
+  Future<String> createSession(String uid, String startAddress) async {
+    DocumentReference docRef =
+        await FirebaseFirestore.instance.collection('sessions').add({
+      'uid': uid,
+      'startAddress': startAddress,
+      'sessionDate': FieldValue.serverTimestamp(),
+      // Additional session fields can be added here.
+    });
+    return docRef.id;
+  }
+
+  // Save establishments as documents in the "establishments" subcollection of the session.
+  Future<void> saveEstablishments(
+      String sessionId, List<dynamic> establishments) async {
+    CollectionReference subCol = FirebaseFirestore.instance
+        .collection('sessions')
+        .doc(sessionId)
+        .collection('establishments');
+    for (var est in establishments) {
+      await subCol.add(est);
+    }
+  }
+}
+
+// ----- TRIP SESSION MODEL -----
+class TripSession {
+  final String sessionId;
+  final String startAddress;
+  final String endAddress;
+  final DateTime sessionDate;
+
+  TripSession({
+    required this.sessionId,
+    required this.startAddress,
+    required this.endAddress,
+    required this.sessionDate,
+  });
+
+  factory TripSession.fromDocument(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    return TripSession(
+      sessionId: doc.id,
+      startAddress: data['startAddress'] ?? '',
+      endAddress: data['endAddress'] ?? '',
+      sessionDate: (data['sessionDate'] as Timestamp).toDate(),
+    );
+  }
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const FoodExplorerApp());
+}
+
+class FoodExplorerApp extends StatelessWidget {
+  const FoodExplorerApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Food Explorer',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
+        fontFamily: _appFontFamily,
+      ),
+      home: const GoogleSignInScreen(),
+    );
+  }
+}
+
+/// ----- GOOGLE SIGN-IN SCREEN ----- ///
+class GoogleSignInScreen extends StatefulWidget {
+  const GoogleSignInScreen({super.key});
+
+  @override
+  _GoogleSignInScreenState createState() => _GoogleSignInScreenState();
+}
+
+class _GoogleSignInScreenState extends State<GoogleSignInScreen> {
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  Future<void> _signInWithGoogle() async {
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) return; // User canceled.
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken, idToken: googleAuth.idToken);
+      final userCredential = await _auth.signInWithCredential(credential);
+      print("User UID: ${userCredential.user!.uid}");
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const ModeSelectionScreen()),
+      );
+    } catch (e) {
+      print("Error during Google Sign-In: $e");
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Google Sign-In")),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: _signInWithGoogle,
+          child: const Text("Sign in with Google"),
+        ),
+      ),
+    );
+  }
+}
+
+/// ----- MODE SELECTION SCREEN ----- ///
+class ModeSelectionScreen extends StatelessWidget {
+  const ModeSelectionScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "Saw an amazing cafe walking by? Don't worry, press Scout Mode to record that gem!",
+                textAlign: TextAlign.center,
+                style: textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 40),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const HomePage()),
+                  );
+                },
+                child: const Text("Scout Mode"),
+                style: ElevatedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 50, vertical: 20),
+                  textStyle: const TextStyle(fontSize: 24),
+                ),
+              ),
+              // Removed Rendezvous Mode button.
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ----- HOME PAGE (SCOUT MODE) ----- ///
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final ApiService apiService = ApiService();
+  final FirebaseService firebaseService = FirebaseService();
+  List<dynamic> restaurants = [];
+  List<dynamic> cafes = [];
+  List<dynamic> desserts = [];
+  loc.LocationData? currentLocation;
+  String? fullAddress;
+  bool isLoading = true;
+  String? firebaseSessionId;
+  String? djangoSessionId;
+  Timer? periodicTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeScoutMode();
+    periodicTimer = Timer.periodic(const Duration(minutes: 5), (timer) async {
+      await _updateLocationWithoutMap();
+    });
+  }
+
+  Future<void> _logout() async {
+    await FirebaseAuth.instance.signOut();
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const GoogleSignInScreen()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _stopScoutMode() async {
+    periodicTimer?.cancel();
+    Navigator.pop(context);
+  }
+
+  Future<void> _initializeScoutMode() async {
+    print("Initializing Scout Mode...");
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      firebaseSessionId = await firebaseService.createSession(
+          user.uid, fullAddress ?? "Unknown Start");
+      print("Firebase session created: $firebaseSessionId");
+    } catch (e) {
+      print("Error creating Firebase session: $e");
+    }
+    try {
+      // Here we pass the UID to Django as well.
+      djangoSessionId = await ApiService().createSessionDjango(user.uid);
+      print("Django session created: $djangoSessionId");
+    } catch (e) {
+      print("Error creating session in Django: $e");
+    }
+    currentLocation = await loc.Location().getLocation();
+    if (currentLocation == null) {
+      print("Error: Unable to fetch current location.");
+      setState(() {
+        isLoading = false;
+      });
+      return;
+    }
+    print(
+        "Current location: ${currentLocation!.latitude}, ${currentLocation!.longitude}");
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        currentLocation!.latitude!,
+        currentLocation!.longitude!,
+      );
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        fullAddress =
+            "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+        print("Address obtained: $fullAddress");
+      }
+    } catch (e) {
+      print("Error fetching address: $e");
+      fullAddress = "Address not available";
+    }
+    try {
+      final places = await apiService.fetchNearbyPlaces(
+        currentLocation!.latitude!,
+        currentLocation!.longitude!,
+      );
+      restaurants = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('restaurant');
+      }).toList();
+      cafes = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('cafe');
+      }).toList();
+      desserts = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('dessert') || types.contains('bakery');
+      }).toList();
+      if (user != null) {
+        final updatedPlaces = places.map((place) {
+          place['uid'] = user.uid;
+          return place;
+        }).toList();
+        if (firebaseSessionId != null) {
+          await firebaseService.saveEstablishments(
+              firebaseSessionId!, updatedPlaces);
+          print("Saved establishments to Firebase under session with UID");
+        }
+      }
+    } catch (e) {
+      print("Error fetching nearby places: $e");
+    }
+    setState(() {
+      isLoading = false;
+    });
+  }
+
+  Future<void> _updateLocationWithoutMap() async {
+    print("Updating location from device...");
+    loc.LocationData? newLocation = await loc.Location().getLocation();
+    setState(() {
+      currentLocation = newLocation;
+      isLoading = true;
+    });
+    print("New location: ${newLocation!.latitude}, ${newLocation.longitude}");
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        newLocation.latitude!,
+        newLocation.longitude!,
+      );
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        fullAddress =
+            "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+        print("New address: $fullAddress");
+      }
+    } catch (e) {
+      print("Error fetching address: $e");
+      fullAddress = "Address not available";
+    }
+    try {
+      final places = await apiService.fetchNearbyPlaces(
+        newLocation.latitude!,
+        newLocation.longitude!,
+      );
+      restaurants = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('restaurant');
+      }).toList();
+      cafes = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('cafe');
+      }).toList();
+      desserts = places.where((place) {
+        final types = place['types'] as List<dynamic>? ?? [];
+        return types.contains('dessert') || types.contains('bakery');
+      }).toList();
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final updatedPlaces = places.map((place) {
+          place['uid'] = user.uid;
+          return place;
+        }).toList();
+        if (firebaseSessionId != null) {
+          await firebaseService.saveEstablishments(firebaseSessionId!, updatedPlaces);
+          print("Updated Firebase with new establishments with UID");
+        }
+      }
+    } catch (e) {
+      print("Error fetching nearby places: $e");
+    }
+    setState(() {
+      isLoading = false;
+    });
+  }
+
+  Future<void> _updateLocationFromMap() async {
+    final newLocation = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MapScreen(
+          onLocationUpdated: (LatLng pos) {
+            print("New location from MapScreen: ${pos.latitude}, ${pos.longitude}");
+          },
+        ),
+      ),
+    );
+    if (newLocation != null && newLocation is LatLng) {
+      print("Received new location from MapScreen");
+      setState(() {
+        currentLocation = loc.LocationData.fromMap({
+          'latitude': newLocation.latitude,
+          'longitude': newLocation.longitude,
+        });
+        isLoading = true;
+      });
+      try {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          newLocation.latitude,
+          newLocation.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          fullAddress =
+              "${place.street}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+          print("Updated address: $fullAddress");
+        }
+      } catch (e) {
+        print("Error fetching address: $e");
+        fullAddress = "Address not available";
+      }
+      try {
+        final places = await apiService.fetchNearbyPlaces(
+          currentLocation!.latitude!,
+          currentLocation!.longitude!,
+        );
+        restaurants = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('restaurant');
+        }).toList();
+        cafes = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('cafe');
+        }).toList();
+        desserts = places.where((place) {
+          final types = place['types'] as List<dynamic>? ?? [];
+          return types.contains('dessert') || types.contains('bakery');
+        }).toList();
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          final updatedPlaces = places.map((place) {
+            place['uid'] = user.uid;
+            return place;
+          }).toList();
+          if (firebaseSessionId != null) {
+            await firebaseService.saveEstablishments(firebaseSessionId!, updatedPlaces);
+            print("Updated Firebase with new establishments from MapScreen with UID");
+          }
+        }
+      } catch (e) {
+        print("Error fetching nearby places: $e");
+      }
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Widget _buildCollapsibleSection(String title, List<dynamic> places) {
+    return ExpansionTile(
+      title: Text(
+        title,
+        style: Theme.of(context)
+            .textTheme
+            .headlineSmall
+            ?.copyWith(fontWeight: FontWeight.bold),
+      ),
+      children: [
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: places.length,
+          itemBuilder: (context, index) {
+            final place = places[index];
+            return ListTile(
+              title: Text(place['name'] ?? 'No Name'),
+              subtitle: Text(place['vicinity'] ?? 'No Address'),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    periodicTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Scout Mode'),
+        // Removed Rendezvous Mode IconButton.
+      ),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: <Widget>[
+            DrawerHeader(
+              decoration: const BoxDecoration(color: Colors.deepOrange),
+              child: Text(
+                'Menu',
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(color: Colors.white),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.flight_takeoff),
+              title: const Text('Trips'),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const TripsScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Logout'),
+              onTap: _logout,
+            ),
+          ],
+        ),
+      ),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (currentLocation != null)
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text(
+                        'Welcome, ${user?.displayName ?? "User"}!\nYour current address is:\n${fullAddress ?? "Loading address..."}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  _buildCollapsibleSection("Restaurants", restaurants),
+                  _buildCollapsibleSection("Cafés", cafes),
+                  _buildCollapsibleSection("Dessert Places", desserts),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 20.0, horizontal: 16.0),
+                    child: ElevatedButton(
+                      onPressed: _stopScoutMode,
+                      child: const Text('Stop Scout Mode'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16.0),
+                        textStyle: const TextStyle(fontSize: 18),
+                        minimumSize: const Size(double.infinity, 50),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+/// ----- TRIPS SCREEN ----- ///
+class TripsScreen extends StatefulWidget {
+  const TripsScreen({Key? key}) : super(key: key);
+  @override
+  _TripsScreenState createState() => _TripsScreenState();
+}
+
+class _TripsScreenState extends State<TripsScreen> {
+  bool isLoading = true;
+  List<TripSession> sessions = [];
+  @override
+  void initState() {
+    super.initState();
+    fetchSessions();
+  }
+  Future<void> fetchSessions() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        isLoading = false;
+      });
+      return;
+    }
+    try {
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('sessions')
+          .where('uid', isEqualTo: user.uid)
+          .orderBy('sessionDate', descending: true)
+          .get();
+      final fetchedSessions = querySnapshot.docs
+          .map((doc) => TripSession.fromDocument(doc))
+          .toList();
+      setState(() {
+        sessions = fetchedSessions;
+        isLoading = false;
+      });
+    } catch (e) {
+      print("Error fetching sessions: $e");
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Your Trips")),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : sessions.isEmpty
+              ? const Center(child: Text("No trips recorded yet."))
+              : ListView.builder(
+                  itemCount: sessions.length,
+                  itemBuilder: (context, index) {
+                    final session = sessions[index];
+                    return ListTile(
+                      title: Text("Session: ${session.sessionId}"),
+                      subtitle: Text(
+                          "Start: ${session.startAddress}\nEnd: ${session.endAddress}"),
+                      trailing:
+                          Text(DateFormat.yMMMd().format(session.sessionDate)),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => TripDetailsScreen(sessionId: session.sessionId),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+    );
+  }
+}
+
+/// ----- TRIP DETAILS SCREEN ----- ///
+class TripDetailsScreen extends StatelessWidget {
+  final String sessionId;
+  const TripDetailsScreen({Key? key, required this.sessionId}) : super(key: key);
+  @override
+  Widget build(BuildContext context) {
+    final establishmentsStream = FirebaseFirestore.instance
+        .collection('sessions')
+        .doc(sessionId)
+        .collection('establishments')
+        .snapshots();
+    return Scaffold(
+      appBar: AppBar(title: const Text("Trip Details")),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: establishmentsStream,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}"));
+          }
+          final docs = snapshot.data?.docs ?? [];
+          if (docs.isEmpty) {
+            return const Center(child: Text("No establishments found for this trip."));
+          }
+          return ListView(
+            children: docs.map((doc) {
+              final data = doc.data() as Map<String, dynamic>;
+              return ListTile(
+                title: Text(data['name'] ?? 'No Name'),
+                subtitle: Text(data['address'] ?? 'No Address'),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// ----- MAP SCREEN (Placeholder) ----- ///
+class MapScreen extends StatelessWidget {
+  final Function(LatLng) onLocationUpdated;
+  const MapScreen({Key? key, required this.onLocationUpdated}) : super(key: key);
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Map Screen')),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () {
+            // Simulate selecting a location (e.g., New York City).
+            final simulatedLocation = LatLng(40.7128, -74.0060);
+            onLocationUpdated(simulatedLocation);
+            Navigator.pop(context, simulatedLocation);
+          },
+          child: const Text('Select Location'),
+        ),
+      ),
+    );
+  }
+}

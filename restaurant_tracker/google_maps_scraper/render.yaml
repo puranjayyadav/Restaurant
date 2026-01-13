@@ -1,0 +1,37 @@
+# Render Blueprint for Google Maps Scraper
+# This configures a cron job that runs the scraper on a schedule
+
+services:
+  # Background Worker (runs the scraper)
+  - type: worker
+    name: google-maps-scraper
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/YOUR_REPO  # Update with your repo
+    branch: main
+    buildCommand: pip install -r google_maps_scraper/requirements.txt
+    startCommand: python google_maps_scraper/github_actions_runner.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false  # Set in dashboard
+      - key: SUPABASE_KEY
+        sync: false  # Set in dashboard
+      - key: PYTHON_VERSION
+        value: 3.11
+
+# Alternative: Cron Job (runs on schedule instead of continuously)
+# Uncomment below and comment out the worker above if you prefer scheduled runs
+#
+# services:
+#   - type: cron
+#     name: google-maps-scraper-cron
+#     runtime: python
+#     repo: https://github.com/YOUR_USERNAME/YOUR_REPO
+#     branch: main
+#     schedule: "*/15 * * * *"  # Every 15 minutes
+#     buildCommand: pip install -r google_maps_scraper/requirements.txt
+#     startCommand: python google_maps_scraper/github_actions_runner.py
+#     envVars:
+#       - key: SUPABASE_URL
+#         sync: false
+#       - key: SUPABASE_KEY
+#         sync: false

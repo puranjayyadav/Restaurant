@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cloneable Adventures</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f7f7f7; margin:0; padding:32px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+    .card { background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+    .card img { width:100%; height:200px; object-fit:cover; display:block; }
+    .card-content { padding:12px 14px 14px 14px; }
+    .title { font-weight:700; font-size:16px; margin:0 0 6px 0; }
+    .subtitle { font-size:13px; color:#555; margin:0 0 8px 0; }
+    .tags { display:flex; flex-wrap:wrap; gap:6px; }
+    .tag { background:#eef3ff; color:#2d4ea4; border-radius:10px; padding:4px 8px; font-size:11px; }
+  </style>
+</head>
+<body>
+  <h2>Cloneable Adventures</h2>
+  <div class="grid">
+    
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1639594396843-69e155376936?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOWUMlMjBEYXRlJTIwTmlnaHQlMjBHdWlkZSUyMCVFMiU4MCU5MyUyMFJvbWFudGljJTIwU3BvdHMlMjBhZXN0aGV0aWN8ZW58MHwxfHx8MTc2NTQ5MTQyOXww&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Date Night: Rooftop Romance</div>
+        <div class="subtitle">Wine, Dine, and Sunset Views</div>
+        <div class="tags"><span class="tag">🍷 Date Night</span></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1518697512320-7a00f0b1021d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOWUMlMjBDYWYlQzMlQTklMjBHdWlkZSUzQSUyMDUlMjBBZXN0aGV0aWMlMjBDb2ZmZWUlMjBTcG90cyUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNDI3fDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Café Crawl: Aesthetic Brews</div>
+        <div class="subtitle">5 Premium Coffee Stops</div>
+        <div class="tags"><span class="tag">📸 Photo Ops</span><span class="tag">☕️ Coffee Run</span></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1703846459096-d4cc376ad3c1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2l0eSUyMGFlc3RoZXRpYyUyMHZlcnRpY2FsJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzN8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Aesthetic Eats</div>
+        <div class="subtitle">Curated Photo Ops & Culinary Delights</div>
+        <div class="tags"><span class="tag">📸 Photo Ops</span></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1745104437283-5843d65cc7f9?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2FmZSUyMGFlc3RoZXRpYyUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNTczfDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">West Village Coffee Crawl</div>
+        <div class="subtitle">A curated trail of the city's finest brews</div>
+        <div class="tags"><span class="tag">☕️ Coffee Run</span></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1703846459096-d4cc376ad3c1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2l0eSUyMGFlc3RoZXRpYyUyMHZlcnRpY2FsJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzN8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC: Budget Weekend</div>
+        <div class="subtitle">Iconic Spots, Low Costs</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1677042929970-26e747d2a3c0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxjaGVsc2VhJTIwTmV3JTIwWW9yayUyMHN0cmVldCUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNTc0fDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">Chelsea Reverie</div>
+        <div class="subtitle">Market Strolls & Skyline Coffee</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1704635329469-45e50f7099d3?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxzb2hvJTIwY2FmZSUyMGl0aW5lcmFyeSVFMiU4MCU5NCUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNDI4fDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">Soho Café Crawl</div>
+        <div class="subtitle">A curated tour of Soho's most beloved coffee spots</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1703846459096-d4cc376ad3c1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2l0eSUyMGFlc3RoZXRpYyUyMHZlcnRpY2FsJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzN8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC: A Day in the Gilded Hours</div>
+        <div class="subtitle">Art, Style, and Evening Magic</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1643106038522-ae8917da622d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwZmFzaGlvbiUyMHN0cmVldCUyMHN0eWxlJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzV8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Curated: SoHo & Hudson Yards</div>
+        <div class="subtitle">Boutique Shopping & Refined Dining</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1601923192090-3ee753b617ec?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxMb3dlciUyMEVhc3QlMjBTaWRlJTJDJTIwTllDJTIwSXRpbmVyYXJ5JTIxJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE0Mjl8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">LES: Art & Skyline</div>
+        <div class="subtitle">NYC’s Elevated East</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1664353656032-7f1badce3f88?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxzb2hvJTIwTmV3JTIwWW9yayUyMHN0cmVldCUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNTc1fDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">SoHo Reverie</div>
+        <div class="subtitle">A curated day of coffee, culture, and chic discovery</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1659554007402-e70b5e99a411?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxORVclMjBZT1JLJTIwQ0lUWSUyMEZPT0QlMjBHVUlERSUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNDMwfDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">Taste NYC</div>
+        <div class="subtitle">A food lover's itinerary through the city</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1647274401619-6ec085657710?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxZb3VyJTIwbmV4dCUyMEdOTyVFMiU4MCU5OXMlMjBndWlkZSUyMHRvJTIwc29tZSUyMG9mJTIwdGhlJTIwY2hpY2VzdCUyME5ZQyUyMGJhcnMlMjBhZXN0aGV0aWN8ZW58MHwxfHx8MTc2NTQ5MTQzMHww&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Nightfall</div>
+        <div class="subtitle">Chic bars for your next girls' night out</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1543691110-1c7d6b1927f6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxTcGVuZCUyMEElMjBEYXklMjBpbiUyMFNvaG8lMjBXaXRoJTIwTWUlMjElMjBhZXN0aGV0aWN8ZW58MHwxfHx8MTc2NTQ5MTQyNnww&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">Soho Soirée</div>
+        <div class="subtitle">A Day of Discovery in New York's Trendiest District</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1678712505183-2716aacb994c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwZm9vZCUyMHBob3RvZ3JhcGh5JTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzV8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC: Sweet Curation</div>
+        <div class="subtitle">Zero-Flop Desserts You’ll Love</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1596892203652-152c4e61d4b5?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOWUMlMjBXRUVLRU5EJTIwJUYwJTlGJTk3JUJEJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE0MzB8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC: Elevated Moments</div>
+        <div class="subtitle">A refined weekend of art, dining, and skyline views</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1703846459096-d4cc376ad3c1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2l0eSUyMGFlc3RoZXRpYyUyMHZlcnRpY2FsJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzN8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Pop-Up Pulse</div>
+        <div class="subtitle">Curated Experiences for the Discerning Explorer</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1659554007402-e70b5e99a411?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxVbHRpbWF0ZSUyME5ldyUyMFlvcmslMjBDaXR5JTIwUmVzdGF1cmFudCUyMEd1aWRlJTIxJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE0MjV8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Culinary Voyage</div>
+        <div class="subtitle">A discerning guide to Manhattan's most coveted dining experiences</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1703846459096-d4cc376ad3c1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxOZXclMjBZb3JrJTIwY2l0eSUyMGFlc3RoZXRpYyUyMHZlcnRpY2FsJTIwYWVzdGhldGljfGVufDB8MXx8fDE3NjU0OTE1NzN8MA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">NYC Iconic</div>
+        <div class="subtitle">Empire State, Liberty, Central Park & SoHo</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+
+    <div class="card">
+      <img src="https://images.unsplash.com/photo-1677042929970-26e747d2a3c0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w4NDI2MTd8MHwxfHNlYXJjaHwxfHxjaGVsc2VhJTIwTmV3JTIwWW9yayUyMHN0cmVldCUyMGFlc3RoZXRpY3xlbnwwfDF8fHwxNzY1NDkxNTc0fDA&ixlib=rb-4.1.0&q=80&w=1080" alt="cover"/>
+      <div class="card-content">
+        <div class="title">Chelsea Reverie</div>
+        <div class="subtitle">A curated weekend in NYC’s riverside enclave</div>
+        <div class="tags"></div>
+      </div>
+    </div>
+    
+  </div>
+</body>
+</html>

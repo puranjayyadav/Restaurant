@@ -1,0 +1,71 @@
+# Environment variables (NEVER commit these!)
+.env
+.env.local
+.env.*.local
+
+# Credentials and secrets (NEVER commit these!)
+creds/
+*.json
+!railway.json
+!my_new_project/railway.json
+!nixpacks.toml
+!package.json
+!package-lock.json
+*-adminsdk-*.json
+firebase-adminsdk-*.json
+service-account*.json
+lib/config/supabase_config.dart
+
+# Python (removed lib/ and lib64/ as they conflict with Flutter)
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# lib/ and lib64/ removed here
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+*.txt
+!requirements.txt
+!my_new_project/requirements.txt
+!runtime.txt
+!google_maps_scraper/scraper_counter.txt
+extraction_log.txt
+test_output.txt
+
+# Data files (optional - uncomment if you don't want to commit JSON files)
+# *.json
+# lemon8_article_links.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+node_modules
+node_modules

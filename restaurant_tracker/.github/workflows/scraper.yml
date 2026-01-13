@@ -1,0 +1,54 @@
+name: Google Maps Scraper
+
+on:
+  # Run every 15 minutes
+  schedule:
+    - cron: '*/15 * * * *'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  scrape-and-enrich:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 14  # Timeout before next run starts
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: google_maps_scraper/review_scraper_test/package-lock.json
+      
+      - name: Install Python dependencies
+        run: |
+          pip install requests supabase python-decouple
+      
+      - name: Install Node dependencies
+        working-directory: google_maps_scraper/review_scraper_test
+        run: |
+          npm install
+      
+      - name: Run scraper
+        working-directory: google_maps_scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python github_actions_runner.py

@@ -1,0 +1,13 @@
+name: Lemon8 Snowball Crawler
+
+on: # Disabled all automatic runs and manual triggers
+  # schedule:
+    # # Run Scout every 30 minutes to discover new URLs
+    # - cron: '*/30 * * * *'
+    # # Run Miner every hour to process queue
+    # - cron: '0 * * * *'
+    # # Run Reprocess daily at 3 AM to retry failed extractions
+    # - cron: '0 3 * * *'
+  # workflow_dispatch:  # Allow manual trigger
+
+jobs:

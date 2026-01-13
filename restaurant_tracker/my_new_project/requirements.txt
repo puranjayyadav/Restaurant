@@ -1,0 +1,20 @@
+Django==5.1.6
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.5.0
+django-cors-headers==4.7.0
+django-filter==24.3
+gunicorn==23.0.0
+psycopg2-binary==2.9.10
+python-decouple==3.8
+dj-database-url==2.3.0
+whitenoise==6.9.0
+firebase-admin==6.6.0
+requests==2.32.3
+thefuzz==0.20.0
+# python-Levenshtein==0.23.0  # Removed: incompatible with Python 3.13, thefuzz works without it (slower but functional)
+ortools>=9.8.0
+phonenumbers>=8.13.0
+scikit-learn>=1.0.0
+scipy>=1.7.0
+python-dotenv==1.0.1
+supabase==2.13.0

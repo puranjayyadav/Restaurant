@@ -1,0 +1,9 @@
+// lib/config/supabase_config.dart.example
+// This is a template file for Supabase configuration
+// Copy this file to supabase_config.dart and fill in your actual credentials
+// DO NOT commit supabase_config.dart to version control
+
+class SupabaseConfig {
+  static const String supabaseUrl = 'YOUR_SUPABASE_URL_HERE';
+  static const String supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY_HERE';
+}

@@ -100,7 +100,7 @@ def save_batch_to_supabase(results: List[Dict[str, Any]], vibe_slug: str, neighb
             on_conflict="place_id,vibe_slug"
         ).execute()
         
-        print(f"      [SUCCESS] ✅ Saved {len(results)} venues (duplicates automatically merged)")
+        print(f"      [SUCCESS] Saved {len(results)} venues (duplicates automatically merged)")
         print(f"      [INFO] Vibe associations: {len(vibes_data)} links created/updated")
         return True
         

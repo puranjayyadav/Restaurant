@@ -762,6 +762,13 @@ class _ItineraryCategorySelectionScreenState
                 result['selectedCategories'] as List<String>? ?? []),
             'description':
                 'An experience curated just for you, designed to unfold like the best stories do...',
+            'itinerary_id':
+                result['itinerary_id'], // Preserve itinerary_id for tracking
+            'narrative': result['narrative'],
+            'total_walk_time_mins': result['total_walk_time_mins'],
+            'filters': {
+              'selectedCategories': result['selectedCategories'],
+            },
             'itinerary_data': {
               'itinerary': itinerary,
             },

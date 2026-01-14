@@ -11,7 +11,8 @@ from .views import (
     pre_create_itineraries, get_featured_itineraries, get_pre_created_itinerary_detail,
     next_best_action, create_itinerary_skeleton, get_address_suggestions_view,
     get_hotspot_itinerary, generate_itinerary, itinerary_details, parse_query, geocode_location,
-    search_venues, save_itinerary, get_saved_itineraries, mark_venue_interaction, delete_venue_interaction
+    search_venues, save_itinerary, get_saved_itineraries, mark_venue_interaction, delete_venue_interaction,
+    lemon8_rag_search
 )
 from .density_heatmap import get_density_heatmap
 try:
@@ -71,4 +72,5 @@ urlpatterns = [
     # User History endpoints
     path('api/mark-venue-interaction/', mark_venue_interaction, name='api-mark-venue-interaction'),
     path('api/delete-venue-interaction/', delete_venue_interaction, name='api-delete-venue-interaction'),
+    path('api/rag/lemon8/search/', lemon8_rag_search, name='api-lemon8-rag-search'),
 ]

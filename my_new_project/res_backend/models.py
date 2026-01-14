@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -188,8 +189,9 @@ class ScrapedRestaurant(models.Model):
     """
     
     SOURCE_CHOICES = [
-        ('yelp', 'Yelp'),
         ('google', 'Google Maps'),
+        ('osm', 'OpenStreetMap'),
+        ('yelp', 'Yelp'),
         ('tripadvisor', 'TripAdvisor'),
         ('foursquare', 'Foursquare'),
         ('opentable', 'OpenTable'),
@@ -197,7 +199,7 @@ class ScrapedRestaurant(models.Model):
     ]
     
     # ========== Source Attribution ==========
-    source = models.CharField(max_length=50, choices=SOURCE_CHOICES, db_index=True)
+    source = models.CharField(max_length=50, choices=SOURCE_CHOICES, db_index=True, default='google')
     source_id = models.CharField(max_length=200, help_text="Original ID from source platform")
     source_url = models.URLField(max_length=500, null=True, blank=True)
     
@@ -254,6 +256,11 @@ class ScrapedRestaurant(models.Model):
     
     # Additional metadata from source
     raw_data = models.JSONField(default=dict, blank=True, help_text="Store original scraped data for reference")
+    raw_osm_data = models.JSONField(default=dict, blank=True, help_text="Raw OSM data")
+    
+    # ========== OSM Integration ==========
+    osm_type = models.CharField(max_length=10, null=True, blank=True, help_text="OSM type: node, way, relation")
+    osm_id = models.BigIntegerField(null=True, blank=True, help_text="OSM ID")
     
     # ========== Data Quality & Management ==========
     is_verified = models.BooleanField(default=False, help_text="Manually verified restaurant")
@@ -282,6 +289,15 @@ class ScrapedRestaurant(models.Model):
     class Meta:
         # Prevent duplicate entries from same source
         unique_together = ('source', 'source_id')
+        
+        # OSM unique constraint
+        constraints = [
+            models.UniqueConstraint(
+                fields=['osm_type', 'osm_id'], 
+                name='venues_osm_unique',
+                condition=Q(osm_type__isnull=False, osm_id__isnull=False)
+            ),
+        ]
         
         # Ordering
         ordering = ['-data_quality_score', '-rating', 'name']

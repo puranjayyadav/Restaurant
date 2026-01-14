@@ -4483,14 +4483,38 @@ def search_venues(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
+        # Search with text matching
         response = (
             supabase.table('venues')
             .select('*')
             .or_(f"name.ilike.%{query}%,address.ilike.%{query}%,street_address.ilike.%{query}%,city.ilike.%{query}%")
             .order('rating', desc=True)
-            .limit(limit)
+            .limit(limit * 2)  # Get more results to filter for NYC
             .execute()
         )
+        
+        # Filter for NYC only - check city and state fields
+        # NYC can be: "New York", "New York City", "NYC", or state = "NY" or "New York"
+        venues = response.data if response.data else []
+        nyc_venues = []
+        for v in venues:
+            city = str(v.get('city', '')).upper() if v.get('city') else ''
+            state = str(v.get('state', '')).upper() if v.get('state') else ''
+            
+            # Check if it's NYC
+            is_nyc = (
+                'NEW YORK' in city or
+                'NYC' in city or
+                state == 'NY' or
+                state == 'NEW YORK'
+            )
+            
+            if is_nyc:
+                nyc_venues.append(v)
+                if len(nyc_venues) >= limit:
+                    break
+        
+        venues = nyc_venues
         
         venues = response.data if response.data else []
         
@@ -4722,4 +4746,55 @@ def get_saved_itineraries(request):
         return Response(
             {"error": f"Fetch failed: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([])
+def lemon8_rag_search(request):
+    """
+    RAG search endpoint for Lemon8 articles.
+
+    Query parameters:
+        - query (required)
+        - city (optional)
+        - category_normalized (optional)
+        - vibe_tags (optional, comma-separated)
+        - limit (optional, default=8)
+        - generate (optional, default=true)
+    """
+    query = request.GET.get("query")
+    if not query:
+        return Response({"error": "query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    city = request.GET.get("city")
+    category_normalized = request.GET.get("category_normalized")
+    vibe_tags = request.GET.get("vibe_tags")
+    vibe_list = [tag.strip() for tag in vibe_tags.split(",")] if vibe_tags else None
+
+    try:
+        limit = int(request.GET.get("limit", 8))
+    except ValueError:
+        return Response({"error": "limit must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+
+    generate_flag = request.GET.get("generate", "true").lower() in ("true", "1", "yes")
+
+    try:
+        from .rag.lemon8_search import search_lemon8
+        payload = search_lemon8(
+            query=query,
+            limit=limit,
+            city=city,
+            category_normalized=category_normalized,
+            vibe_tags=vibe_list,
+            generate_answer=generate_flag,
+        )
+        return Response(payload, status=status.HTTP_200_OK)
+    except Exception as e:
+        import traceback
+        print(f"ERROR: lemon8_rag_search failed: {e}")
+        print(traceback.format_exc())
+        return Response(
+            {"error": f"RAG search failed: {e}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

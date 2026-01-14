@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import '../widgets/route_map_widget.dart';
 import '../widgets/rich_venue_card.dart';
+import '../widgets/inline_venue_search_panel.dart';
+import '../widgets/beautiful_snackbar.dart';
 import '../api_service.dart';
 
 /// Plandit V2 detail experience: cinematic header, living timeline,
@@ -25,6 +27,7 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
   bool _isLoadingRichData = false;
   bool _isRegenerating = false;
   late Map<String, dynamic> _currentItinerary;
+  int? _expandedGapIndex; // Track which gap has the search panel expanded
 
   @override
   void initState() {
@@ -225,6 +228,68 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
       if (dollars > maxPrice) maxPrice = dollars;
     }
     return '\$' * maxPrice;
+  }
+
+  String _calculateTimeForInsertPosition(int insertIndex, List<dynamic> stops) {
+    // Calculate time based on position between stops
+    if (stops.isEmpty) {
+      return '10:00 AM';
+    }
+    
+    if (insertIndex < 0) {
+      insertIndex = 0;
+    }
+    if (insertIndex >= stops.length) {
+      insertIndex = stops.length - 1;
+    }
+    
+    // Get the time from the stop before the insertion point
+    String? beforeTime;
+    if (insertIndex >= 0 && insertIndex < stops.length) {
+      final beforeStop = stops[insertIndex] as Map<String, dynamic>?;
+      beforeTime = beforeStop?['start_time']?.toString();
+    }
+    
+    // Get the time from the stop after the insertion point
+    String? afterTime;
+    if (insertIndex + 1 < stops.length) {
+      final afterStop = stops[insertIndex + 1] as Map<String, dynamic>?;
+      afterTime = afterStop?['start_time']?.toString();
+    }
+    
+    // Try to parse and calculate midpoint time
+    try {
+      DateTime? beforeDateTime;
+      DateTime? afterDateTime;
+      
+      if (beforeTime != null && beforeTime.trim().isNotEmpty) {
+        beforeDateTime = DateFormat.jm().parse(beforeTime.replaceAll('\n', ' ').trim());
+      }
+      if (afterTime != null && afterTime.trim().isNotEmpty) {
+        afterDateTime = DateFormat.jm().parse(afterTime.replaceAll('\n', ' ').trim());
+      }
+      
+      if (beforeDateTime != null && afterDateTime != null) {
+        // Calculate midpoint between two times
+        final diff = afterDateTime.difference(beforeDateTime);
+        final midpoint = beforeDateTime.add(Duration(milliseconds: diff.inMilliseconds ~/ 2));
+        return DateFormat('h:mm a').format(midpoint);
+      } else if (beforeDateTime != null) {
+        // Add 1.5 hours after the previous stop
+        final nextTime = beforeDateTime.add(const Duration(hours: 1, minutes: 30));
+        return DateFormat('h:mm a').format(nextTime);
+      } else if (afterDateTime != null) {
+        // Subtract 1.5 hours before the next stop
+        final prevTime = afterDateTime.subtract(const Duration(hours: 1, minutes: 30));
+        return DateFormat('h:mm a').format(prevTime);
+      }
+    } catch (e) {
+      // Fall through to default calculation
+    }
+    
+    // Default: calculate based on index (1.5 hours per stop)
+    final base = DateTime(2024, 1, 1, 10).add(Duration(minutes: 90 * (insertIndex + 1)));
+    return DateFormat('h:mm a').format(base);
   }
 
   String _formattedTimeForStop(int index, Map<String, dynamic> stop) {
@@ -635,6 +700,7 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
 
       if (i != _stops.length - 1) {
         widgets.add(_buildWalkingGap(
+          index: i,
           minutes: _walkMinutesBetween(i),
           distance: _walkDistanceBetween(i),
           showAddStop: i == 0 || i == _stops.length - 2,
@@ -778,67 +844,178 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
   }
 
   Widget _buildWalkingGap({
+    required int index,
     required int minutes,
     required String distance,
     bool showAddStop = true,
   }) {
-    return Row(
+    final isExpanded = _expandedGapIndex == index;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(width: 50),
-        SizedBox(
-          width: 12,
-          child: Column(
-            children: List.generate(
-              4,
-              (index) => Container(
-                width: 2,
-                height: 4,
-                color: Colors.grey[300],
-                margin: const EdgeInsets.symmetric(vertical: 2),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 20),
-        Container(
-          margin: const EdgeInsets.symmetric(vertical: 16),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[300]!),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.directions_walk, size: 16, color: Colors.grey[600]),
-              const SizedBox(width: 8),
-              Text(
-                '$minutes min walk ($distance)',
-                style: TextStyle(
-                  color: Colors.grey[700],
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              if (showAddStop) ...[
-                Container(
-                  height: 12,
-                  width: 1,
-                  color: Colors.grey[300],
-                  margin: const EdgeInsets.symmetric(horizontal: 10),
-                ),
-                const Text(
-                  'Add stop?',
-                  style: TextStyle(
-                    color: Colors.blue,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
+        Row(
+          children: [
+            const SizedBox(width: 50),
+            SizedBox(
+              width: 12,
+              child: Column(
+                children: List.generate(
+                  4,
+                  (idx) => Container(
+                    width: 2,
+                    height: 4,
+                    color: Colors.grey[300],
+                    margin: const EdgeInsets.symmetric(vertical: 2),
                   ),
                 ),
-              ],
-            ],
-          ),
+              ),
+            ),
+            const SizedBox(width: 20),
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey[300]!),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.directions_walk, size: 16, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$minutes min walk ($distance)',
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (showAddStop) ...[
+                    Container(
+                      height: 12,
+                      width: 1,
+                      color: Colors.grey[300],
+                      margin: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _expandedGapIndex = isExpanded ? null : index;
+                        });
+                      },
+                      child: Text(
+                        'Add stop?',
+                        style: TextStyle(
+                          color: Colors.blue,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
+        // Inline search panel when expanded
+        if (isExpanded && showAddStop)
+          Padding(
+            padding: const EdgeInsets.only(left: 82, right: 24, bottom: 16),
+            child: _buildInlineVenueSearchPanel(index),
+          ),
       ],
+    );
+  }
+  
+  Widget _buildInlineVenueSearchPanel(int insertIndex) {
+    // Get current location from the first stop or use default
+    double? currentLat;
+    double? currentLon;
+    
+    if (_stops.isNotEmpty && insertIndex < _stops.length) {
+      final stop = _stops[insertIndex];
+      currentLat = (stop['latitude'] as num?)?.toDouble() ?? 
+                   (stop['postgres_data']?['latitude'] as num?)?.toDouble();
+      currentLon = (stop['longitude'] as num?)?.toDouble() ?? 
+                   (stop['postgres_data']?['longitude'] as num?)?.toDouble();
+    }
+    
+    return InlineVenueSearchPanel(
+      itineraryId: _currentItinerary['id']?.toString() ?? 
+                   _currentItinerary['firestore_id']?.toString(),
+      insertPosition: insertIndex + 1,
+      currentLatitude: currentLat,
+      currentLongitude: currentLon,
+      onStopCreated: (stopData) {
+        // Handle stop creation - add stop to itinerary
+        setState(() {
+          _expandedGapIndex = null;
+          
+          // Get the current itinerary data
+          final itineraryData = _currentItinerary['itinerary_data'] as Map<String, dynamic>? ?? {};
+          final stops = itineraryData['itinerary'] as List<dynamic>? ?? 
+                       _currentItinerary['items'] as List<dynamic>? ?? [];
+          
+          // Create the new stop object
+          final venue = stopData['venue'] as Map<String, dynamic>? ?? {};
+          final newStop = {
+            'place_id': venue['id'] ?? stopData['venue_id'],
+            'place_name': venue['name'] ?? 'New Stop',
+            'name': venue['name'] ?? 'New Stop',
+            'latitude': venue['latitude'],
+            'longitude': venue['longitude'],
+            'address': venue['address'] ?? '',
+            'rating': venue['rating'],
+            'category': venue['categories']?.isNotEmpty == true 
+                ? (venue['categories'] as List).first.toString()
+                : 'Spot',
+            'start_time': _calculateTimeForInsertPosition(insertIndex, stops),
+            'postgres_data': {
+              'place_id': venue['id'] ?? stopData['venue_id'],
+              'name': venue['name'] ?? 'New Stop',
+              'latitude': venue['latitude'],
+              'longitude': venue['longitude'],
+              'address': venue['address'] ?? '',
+              'rating': venue['rating'],
+              'category': venue['categories']?.isNotEmpty == true 
+                  ? (venue['categories'] as List).first.toString()
+                  : 'Spot',
+            },
+          };
+          
+          // Insert the stop at the correct position
+          final updatedStops = List<Map<String, dynamic>>.from(
+            stops.map((s) => Map<String, dynamic>.from(s as Map))
+          );
+          updatedStops.insert(insertIndex + 1, newStop);
+          
+          // Update the itinerary data
+          final updatedItineraryData = Map<String, dynamic>.from(itineraryData);
+          updatedItineraryData['itinerary'] = updatedStops;
+          
+          // Update the current itinerary
+          _currentItinerary = Map<String, dynamic>.from(_currentItinerary);
+          _currentItinerary['itinerary_data'] = updatedItineraryData;
+          
+          // Also update items if it exists
+          if (_currentItinerary.containsKey('items')) {
+            _currentItinerary['items'] = updatedStops;
+          }
+        });
+        
+        // Refresh rich data to show new stop
+        _fetchRichData();
+        
+        // Show success message using the same style as saving itinerary
+        BeautifulSnackbar.showSuccess(context, 'Stop added successfully! 💚');
+      },
+      onCancel: () {
+        setState(() {
+          _expandedGapIndex = null;
+        });
+      },
     );
   }
 }

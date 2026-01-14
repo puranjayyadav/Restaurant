@@ -226,6 +226,11 @@ class _PlanditAskAISectionState extends State<PlanditAskAISection> {
         'subtitle': _getSubtitleFromFilters(activeFilters),
         'description':
             'An experience curated just for you, designed to unfold like the best stories do...',
+        'itinerary_id':
+            result['itinerary_id'], // Preserve itinerary_id for tracking
+        'narrative': result['narrative'],
+        'total_walk_time_mins': result['total_walk_time_mins'],
+        'filters': activeFilters,
         'itinerary_data': {
           'itinerary': result['itinerary'] ?? [],
         },

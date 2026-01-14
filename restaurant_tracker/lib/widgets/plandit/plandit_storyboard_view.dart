@@ -308,7 +308,7 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(lat != null ? '✨ New area explored!' : '✨ New itinerary generated!'),
+            content: Text(lat != null ? '✨ New area explored!' : '✨ Itinerary saved successfully!'),
             backgroundColor: const Color(0xFFF5DEB3),
             behavior: SnackBarBehavior.floating,
           ),
@@ -320,7 +320,7 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to regenerate: ${e.toString()}'),
-            backgroundColor: Colors.red,
+            backgroundColor: Colors.red[600],
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -418,7 +418,7 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
                 const Icon(Icons.check_circle, color: Colors.white),
                 const SizedBox(width: 12),
                 Text(
-                  'Itinerary saved successfully!',
+                  '✨ Itinerary saved!',
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.w500,
                     color: Colors.white,
@@ -426,7 +426,7 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
                 ),
               ],
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: const Color(0xFF2D5016),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
           ),
@@ -439,7 +439,7 @@ class _PlanditStoryboardViewState extends State<PlanditStoryboardView>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to save: ${e.toString()}'),
-            backgroundColor: Colors.red,
+            backgroundColor: Colors.red[600],
             behavior: SnackBarBehavior.floating,
           ),
         );

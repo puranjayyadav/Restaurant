@@ -128,10 +128,36 @@ WSGI_APPLICATION = 'my_new_project.wsgi.application'
 # Use Supabase PostgreSQL if DATABASE_URL is set, otherwise use SQLite for local dev
 import os
 import dj_database_url
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-# Try to load from .env file first, then fall back to environment variable
-DATABASE_URL = config('DATABASE_URL', default=os.environ.get('DATABASE_URL'))
+# Prefer explicit Supabase DB URL when present
+SUPABASE_DATABASE_URL = config('SUPABASE_DATABASE_URL', default=os.environ.get('SUPABASE_DATABASE_URL'))
+DATABASE_URL = SUPABASE_DATABASE_URL or config('DATABASE_URL', default=os.environ.get('DATABASE_URL'))
+
+def _ensure_supabase_sslmode(database_url: str, force_require: bool = False) -> str:
+    if not database_url:
+        return database_url
+    parsed = urlparse(database_url)
+    host = parsed.hostname or ""
+    if not force_require and "supabase.co" not in host:
+        return database_url
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if query_params.get("sslmode") != "require":
+        query_params["sslmode"] = "require"
+    new_query = urlencode(query_params)
+    return urlunparse(parsed._replace(query=new_query))
+
+DATABASE_URL = _ensure_supabase_sslmode(DATABASE_URL, force_require=bool(SUPABASE_DATABASE_URL))
 if DATABASE_URL:
+    _parsed_db = urlparse(DATABASE_URL)
+    _db_host = _parsed_db.hostname or ""
+    _db_query = dict(parse_qsl(_parsed_db.query, keep_blank_values=True))
+    _db_sslmode = _db_query.get("sslmode", "(unset)")
+    print(f"[DB] Using DATABASE_URL host={_db_host}, sslmode={_db_sslmode}")
+if DATABASE_URL:
+    # Avoid libpq env overrides forcing verify-full
+    for _var in ("PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY"):
+        os.environ.pop(_var, None)
     # Use Supabase/PostgreSQL if DATABASE_URL is provided
     DATABASES = {
         'default': dj_database_url.config(
@@ -140,6 +166,8 @@ if DATABASE_URL:
             conn_health_checks=True,
         )
     }
+    DATABASES['default'].setdefault('OPTIONS', {})
+    DATABASES['default']['OPTIONS']['sslmode'] = config('PGSSLMODE', default='prefer')
 else:
     # Default to SQLite for local development
     DATABASES = {

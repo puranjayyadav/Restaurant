@@ -14,7 +14,7 @@ You can override BASE_URL via the BASE_URL env var.
 import os
 import time
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -46,12 +46,26 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
+BLUE = "\033[94m"
+MAGENTA = "\033[95m"
 RESET = "\033[0m"
 
 
 def print_result(success: bool, message: str) -> None:
     color = GREEN if success else RED
     print(f"{color}{'[PASS]' if success else '[FAIL]'}{RESET} {message}")
+
+
+def print_section(title: str) -> None:
+    print(f"\n{MAGENTA}{'=' * 72}{RESET}")
+    print(f"{MAGENTA}{title}{RESET}")
+    print(f"{MAGENTA}{'=' * 72}{RESET}")
+
+
+def print_kv(title: str, items: List[Tuple[str, str]]) -> None:
+    print(f"{BLUE}{title}{RESET}")
+    for key, value in items:
+        print(f"  - {key}: {value}")
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -70,7 +84,7 @@ def in_nyc_bounds(lat: float, lon: float) -> bool:
 def post_json(name: str, endpoint: str, payload: Dict[str, Any], timeout: int) -> Optional[Dict[str, Any]]:
     """POST helper with consistent logging."""
     print(f"\n{CYAN}Calling {name}{RESET} -> {endpoint}")
-    print(f"Payload: {payload}")
+    print_kv("Request", [("payload", str(payload))])
     start = time.time()
     try:
         resp = requests.post(endpoint, json=payload, timeout=timeout)
@@ -82,7 +96,7 @@ def post_json(name: str, endpoint: str, payload: Dict[str, Any], timeout: int) -
             return None
 
         data = resp.json()
-        print(f"Response ({duration:.2f}s): {data}")
+        print_kv("Response", [("time", f"{duration:.2f}s"), ("keys", ", ".join(sorted(data.keys())) if isinstance(data, dict) else "list")])
         return data
     except requests.exceptions.ConnectionError:
         print_result(False, f"{name} failed: could not connect to {endpoint}")
@@ -268,9 +282,31 @@ def test_itinerary_details_from_generated() -> bool:
 
 
 # --- End-to-end flow ---
-def test_end_to_end_from_parse() -> bool:
-    # Step 1: parse natural language query
-    parsed = post_json("Parse query (E2E)", ENDPOINTS["parse_query"], {"query": "romantic indian places in soho"}, TIMEOUTS["parse_query"])
+def summarize_itinerary(itinerary: List[Dict[str, Any]]) -> None:
+    if not itinerary:
+        print_result(False, "No itinerary items to summarize")
+        return
+    print_kv(
+        "Itinerary snapshot",
+        [
+            ("stops", str(len(itinerary))),
+            ("first_stop", itinerary[0].get("name", "unknown")),
+            ("first_slot", itinerary[0].get("slot", "unknown")),
+        ],
+    )
+    print("  Top 3 stops:")
+    for idx, item in enumerate(itinerary[:3], 1):
+        name = item.get("name", "unknown")
+        slot = item.get("slot", "unknown")
+        rating = item.get("rating", "n/a")
+        print(f"   {idx}. {name} | {slot} | rating={rating}")
+
+
+def run_chained_flow_for_query(query: str, order_index: int) -> bool:
+    print_section(f"Flow {order_index}: {query}")
+
+    # Step 1: Parse
+    parsed = post_json("Parse query", ENDPOINTS["parse_query"], {"query": query}, TIMEOUTS["parse_query"])
     if not parsed:
         return False
 
@@ -278,22 +314,45 @@ def test_end_to_end_from_parse() -> bool:
     selected_vibe = parsed.get("selected_vibe") or "dinner_date"
     social_context = parsed.get("social_context") or "couple"
     cuisine_preferences = parsed.get("cuisine_preferences") or []
+    time_pref = parsed.get("time_preference")
 
-    # Step 2: geocode location
-    geocoded = post_json("Geocode (E2E)", ENDPOINTS["geocode_location"], {"location_hint": location_hint}, TIMEOUTS["geocode_location"])
+    print_kv(
+        "Parsed intent",
+        [
+            ("location_hint", str(location_hint)),
+            ("selected_vibe", str(selected_vibe)),
+            ("social_context", str(social_context)),
+            ("time_preference", str(time_pref)),
+            ("cuisine_count", str(len(cuisine_preferences))),
+        ],
+    )
+
+    # Step 2: Geocode
+    geocoded = post_json("Geocode location", ENDPOINTS["geocode_location"], {"location_hint": location_hint}, TIMEOUTS["geocode_location"])
     if not geocoded:
         return False
 
     lat = geocoded.get("latitude")
     lon = geocoded.get("longitude")
     if lat is None or lon is None:
-        print_result(False, "Geocode (E2E) did not return latitude/longitude")
+        print_result(False, "Geocode did not return latitude/longitude")
         return False
 
-    # Step 3: generate itinerary using parsed + geocoded data
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        print_result(False, f"Geocode returned invalid coordinates: {lat}, {lon}")
+        return False
+
+    if not in_nyc_bounds(lat_f, lon_f):
+        print_result(False, f"Geocoded point outside NYC bounds: ({lat_f:.4f}, {lon_f:.4f})")
+        return False
+
+    # Step 3: Generate itinerary (connected to previous responses)
     generate_payload = {
-        "latitude": lat,
-        "longitude": lon,
+        "latitude": lat_f,
+        "longitude": lon_f,
         "selected_vibe": selected_vibe,
         "social_context": social_context,
         "radius_meters": 3000,
@@ -302,48 +361,59 @@ def test_end_to_end_from_parse() -> bool:
     if cuisine_preferences:
         generate_payload["cuisine_preferences"] = cuisine_preferences
 
-    generated = generate_with_payload("Generate itinerary (E2E)", generate_payload)
+    generated = generate_with_payload("Generate itinerary", generate_payload)
     if not generated:
         return False
 
     itinerary = generated.get("itinerary", [])
     if not itinerary:
-        print_result(False, "Generate itinerary (E2E) returned no stops")
+        print_result(False, "Generate itinerary returned no stops")
         return False
 
-    # Step 4: fetch details for returned place_ids
+    summarize_itinerary(itinerary)
+
+    # Step 4: Itinerary details (connected to previous response)
     place_ids = [item.get("place_id") for item in itinerary if item.get("place_id")]
     if not place_ids:
-        print_result(False, "No place_ids from itinerary to fetch details (E2E)")
+        print_result(False, "No place_ids returned from itinerary")
         return False
 
-    details = post_json("Itinerary details (E2E)", ENDPOINTS["itinerary_details"], {"place_ids": place_ids[:6]}, TIMEOUTS["itinerary_details"])
+    details = post_json("Itinerary details", ENDPOINTS["itinerary_details"], {"place_ids": place_ids[:6]}, TIMEOUTS["itinerary_details"])
     if not details:
         return False
 
     venues = details.get("venues", [])
     if not venues:
-        print_result(False, "Itinerary details (E2E) returned empty venues array")
+        print_result(False, "Itinerary details returned empty venues array")
         return False
 
-    print_result(True, f"E2E flow succeeded with {len(itinerary)} stops and {len(venues)} venue details")
+    # Basic sanity check: required fields present
+    required_fields = ["place_id", "name", "address", "insights"]
+    missing = [v.get("place_id") for v in venues if not all(f in v for f in required_fields)]
+    if missing:
+        print_result(False, f"Venue details missing fields for: {missing[:3]}")
+        return False
+
+    print_kv("Venue details", [("count", str(len(venues))), ("sample", venues[0].get("name", "unknown"))])
+    print_result(True, f"Flow {order_index} succeeded")
     return True
 
 
 def main() -> None:
-    print(f"{YELLOW}Starting API end-to-end tests against {BASE_URL}{RESET}")
-    tests = [
+    print_section(f"API end-to-end tests against {BASE_URL}")
+
+    # Sequential pre-flight tests (fast validation)
+    preflight = [
         ("Geocode returns valid coords", test_geocode_returns_valid_coords),
         ("Geocode randomization varies", test_geocode_randomization_varies),
         ("Geocode requires hint", test_geocode_requires_hint),
         ("Parse query maps fields", test_parse_query_maps_fields),
         ("Generate itinerary with sample payload", test_generate_with_sample_payload),
         ("Itinerary details from generated itinerary", test_itinerary_details_from_generated),
-        ("Full end-to-end flow", test_end_to_end_from_parse),
     ]
 
     passed = 0
-    for name, fn in tests:
+    for name, fn in preflight:
         print(f"\n{CYAN}Running: {name}{RESET}")
         try:
             if fn():
@@ -351,11 +421,41 @@ def main() -> None:
         except Exception as exc:
             print_result(False, f"{name} raised exception: {exc}")
 
-    print(f"\n{YELLOW}Test summary: {passed}/{len(tests)} passed{RESET}")
-    if passed == len(tests):
-        print_result(True, "All endpoint tests passed")
-    else:
-        print_result(False, "Some endpoint tests failed (see above)")
+    print_kv("Preflight summary", [("passed", f"{passed}/{len(preflight)}")])
+
+    # Chained flows in the exact order provided, with edge cases to stress parsing.
+    queries = [
+        "romantic indian places in soho",
+        "cheap sushi near me",  # missing location
+        "late night tacos 2am in queens",  # time + location
+        "family friendly brunch with stroller in brooklyn",
+        "quiet cafe to work in dumbo with outlets",
+        "italian or thai, surprise me, near union square",
+        "vegan pizza not too pricey in williamsburg",
+        "cozy date night spot with cocktails, no loud music",
+        "I want something spicy, South Indian vibes, downtown",
+        "best speakeasy-ish bar, but not too crowded",
+        "random",  # minimal input
+        "asdf qwerty 123",  # nonsense input
+    ]
+
+    flow_passed = 0
+    for idx, query in enumerate(queries, 1):
+        try:
+            if run_chained_flow_for_query(query, idx):
+                flow_passed += 1
+        except Exception as exc:
+            print_result(False, f"Flow {idx} raised exception: {exc}")
+
+    print_section("Final summary")
+    print_kv(
+        "Results",
+        [
+            ("preflight_passed", f"{passed}/{len(preflight)}"),
+            ("flows_passed", f"{flow_passed}/{len(queries)}"),
+            ("total_passed", f"{passed + flow_passed}/{len(preflight) + len(queries)}"),
+        ],
+    )
 
 
 if __name__ == "__main__":

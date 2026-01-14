@@ -498,14 +498,17 @@ class DayPlannerService:
         # Generate narrative
         narrative = self._generate_narrative(itinerary, selected_vibe, social_context)
         
+        # Generate unique itinerary ID for tracking
+        import uuid
+        itinerary_id = str(uuid.uuid4())
+        
         # Save itinerary to user history
         if user_id and history_service and itinerary:
-            import uuid
             place_ids = [stop.get('place_id') for stop in itinerary if stop.get('place_id')]
             if place_ids:
                 history_service.save_itinerary_history(
                     user_id=user_id,
-                    itinerary_id=str(uuid.uuid4()),
+                    itinerary_id=itinerary_id,
                     place_ids=place_ids,
                     filters={
                         'cuisine': cuisine_preferences,
@@ -517,6 +520,7 @@ class DayPlannerService:
                 print(f"DEBUG: Saved {len(place_ids)} venues to user history")
         
         return {
+            "itinerary_id": itinerary_id,  # Return unique ID for tracking
             "itinerary": itinerary,
             "hidden_gems_injected": gems_injected,
             "total_walk_time_mins": total_walk_time,

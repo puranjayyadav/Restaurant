@@ -8,7 +8,7 @@ import 'dart:math';
 import 'dart:async';
 
 class ApiService {
-  final String googleApiKey = 'AIzaSyCqeTKWDSpdukY0rG3_0jipiGY1W5UU_28';
+  final String googleApiKey = 'AIzaSyB8wraL8c5WbYNrnOAR2iDkO6FHfuCr6G0';
 
   Future<Map<String, dynamic>?> fetchPlaceDetails(String placeId) async {
     try {
@@ -1058,7 +1058,7 @@ class ApiService {
   }) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
-      
+
       // Save to loved_places table
       final uri = Uri.parse('$supabaseUrl/loved_places');
       final response = await http.post(
@@ -1078,16 +1078,16 @@ class ApiService {
           'lng': lng,
         }),
       );
-      
+
       final lovedSuccess = response.statusCode == 201 ||
           response.statusCode == 200 ||
           response.statusCode == 204;
-      
+
       if (!lovedSuccess) {
         print('ERROR: Failed to save to loved_places: ${response.statusCode}');
         return false;
       }
-      
+
       // Also save to user_venue_interactions table
       try {
         final interactionResponse = await http.post(
@@ -1101,12 +1101,13 @@ class ApiService {
         );
         // Don't fail if interaction save fails, just log it
         if (interactionResponse.statusCode != 200) {
-          print('WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
+          print(
+              'WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
         }
       } catch (e) {
         print('WARNING: Error saving to user_venue_interactions: $e');
       }
-      
+
       return true;
     } catch (e) {
       print('ERROR: lovePlace failure: $e');
@@ -1118,7 +1119,7 @@ class ApiService {
   Future<bool> unlovePlace(String userId, String placeId) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
-      
+
       // Remove from loved_places table
       final uri = Uri.parse(
           '$supabaseUrl/loved_places?user_id=eq.$userId&place_id=eq.$placeId');
@@ -1129,14 +1130,16 @@ class ApiService {
           'Authorization': 'Bearer $supabaseAnonKey',
         },
       );
-      
-      final unloveSuccess = response.statusCode == 204 || response.statusCode == 200;
-      
+
+      final unloveSuccess =
+          response.statusCode == 204 || response.statusCode == 200;
+
       if (!unloveSuccess) {
-        print('ERROR: Failed to remove from loved_places: ${response.statusCode}');
+        print(
+            'ERROR: Failed to remove from loved_places: ${response.statusCode}');
         return false;
       }
-      
+
       // Also remove from user_venue_interactions table
       try {
         final interactionResponse = await http.delete(
@@ -1150,12 +1153,13 @@ class ApiService {
         );
         // Don't fail if interaction delete fails, just log it
         if (interactionResponse.statusCode != 200) {
-          print('WARNING: Failed to remove from user_venue_interactions: ${interactionResponse.statusCode}');
+          print(
+              'WARNING: Failed to remove from user_venue_interactions: ${interactionResponse.statusCode}');
         }
       } catch (e) {
         print('WARNING: Error removing from user_venue_interactions: $e');
       }
-      
+
       return true;
     } catch (e) {
       print('ERROR: unlovePlace failure: $e');
@@ -1215,7 +1219,7 @@ class ApiService {
   Future<bool> dislikePlace(String userId, String placeId, String? name) async {
     try {
       if (supabaseAnonKey.isEmpty) return false;
-      
+
       // Save to disliked_places table (existing functionality)
       final uri = Uri.parse('$supabaseUrl/disliked_places');
       final response = await http.delete(
@@ -1232,11 +1236,11 @@ class ApiService {
           'name': name,
         }),
       );
-      
+
       final dislikedSuccess = response.statusCode == 201 ||
           response.statusCode == 204 ||
           response.statusCode == 200;
-      
+
       // Also save to user_venue_interactions table
       try {
         final interactionResponse = await http.delete(
@@ -1250,12 +1254,13 @@ class ApiService {
         );
         // Don't fail if interaction save fails, just log it
         if (interactionResponse.statusCode != 200) {
-          print('WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
+          print(
+              'WARNING: Failed to save to user_venue_interactions: ${interactionResponse.statusCode}');
         }
       } catch (e) {
         print('WARNING: Error saving to user_venue_interactions: $e');
       }
-      
+
       return dislikedSuccess;
     } catch (e) {
       print('ERROR: dislikePlace failure: $e');
@@ -1283,11 +1288,12 @@ class ApiService {
           'interaction_type': 'seen',
         }),
       );
-      
+
       if (response.statusCode == 200) {
         return true;
       } else {
-        print('WARNING: Failed to save to user_venue_interactions: ${response.statusCode}');
+        print(
+            'WARNING: Failed to save to user_venue_interactions: ${response.statusCode}');
         return false;
       }
     } catch (e) {
@@ -1309,7 +1315,7 @@ class ApiService {
           'interaction_type': 'seen',
         }),
       );
-      
+
       return response.statusCode == 200;
     } catch (e) {
       print('ERROR: unmarkPlaceAsSeen failure: $e');
@@ -3742,7 +3748,8 @@ class ApiService {
         // Connection error - server might not be running
         print('ERROR: Connection failed to $url');
         print('ERROR: Make sure the Django server is running on $baseUrl');
-        throw Exception('Cannot connect to server. Please ensure the Django backend server is running.');
+        throw Exception(
+            'Cannot connect to server. Please ensure the Django backend server is running.');
       }
 
       if (response.statusCode == 200) {
@@ -3758,9 +3765,12 @@ class ApiService {
           throw Exception(errorBody['error'] ?? 'Failed to generate itinerary');
         } catch (jsonError) {
           // Response is not JSON (likely HTML error page)
-          print('ERROR: Server returned HTML instead of JSON. Status: ${response.statusCode}');
-          print('ERROR: Response body (first 500 chars): ${responseBody.substring(0, responseBody.length > 500 ? 500 : responseBody.length)}');
-          throw Exception('Server error (${response.statusCode}): The server returned an error page. Please check if the Django server is running and check server logs.');
+          print(
+              'ERROR: Server returned HTML instead of JSON. Status: ${response.statusCode}');
+          print(
+              'ERROR: Response body (first 500 chars): ${responseBody.substring(0, responseBody.length > 500 ? 500 : responseBody.length)}');
+          throw Exception(
+              'Server error (${response.statusCode}): The server returned an error page. Please check if the Django server is running and check server logs.');
         }
       }
     } catch (e) {

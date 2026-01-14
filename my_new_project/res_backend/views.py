@@ -235,6 +235,9 @@ def get_hotspot_itinerary(request):
             latitude__range=(lat-0.05, lat+0.05),
             longitude__range=(lng-0.05, lng+0.05),
             rating__gte=3.5  # Lowered from 4.0 to include more variety
+        ).only(
+            'name', 'latitude', 'longitude', 'description',
+            'rating', 'categories', 'price_range', 'city'
         )[:100]  # Increased from 20 to 100
         
         print(f"[Hotspot] PostgreSQL candidates: {local_spots.count()}")
@@ -283,7 +286,7 @@ class EstablishmentViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'created_at', 'updated_at']
 
     def get_queryset(self):
-        queryset = Establishment.objects.filter(user=self.request.user)
+        queryset = Establishment.objects.filter(user=self.request.user).prefetch_related('features')
         
         # Filter by features
         features = self.request.query_params.getlist('features', [])
@@ -3095,7 +3098,13 @@ def get_scraped_restaurants(request):
         radius_km = request.GET.get('radius_km', 10)  # Default 10km radius
         
         # Start with base query
-        queryset = ScrapedRestaurant.objects.filter(is_active=True, duplicate_of__isnull=True)
+        queryset = ScrapedRestaurant.objects.filter(
+            is_active=True,
+            duplicate_of__isnull=True
+        ).only(
+            'id', 'name', 'source', 'city', 'state', 'latitude', 'longitude',
+            'rating', 'total_reviews', 'price_range', 'is_verified', 'data_quality_score'
+        )
         
         # Apply filters
         if city:

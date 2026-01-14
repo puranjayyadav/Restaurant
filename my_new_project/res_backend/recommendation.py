@@ -14,18 +14,18 @@ class RestaurantRecommender:
     def _initialize_features(self):
         """Initialize feature columns from all establishments in database."""
         try:
-            establishments = Establishment.objects.all()
+            from .models import EstablishmentFeature
             
-            # Extract all possible values for categorical features
-            dining_styles = set(e.dining_style for e in establishments)
-            price_ranges = set(e.price_range for e in establishments)
-            features = set(f.feature_type for e in establishments for f in e.features.all())
+            # Extract all possible values for categorical features using distinct queries
+            dining_styles = set(Establishment.objects.values_list('dining_style', flat=True).distinct())
+            price_ranges = set(Establishment.objects.values_list('price_range', flat=True).distinct())
+            features = set(EstablishmentFeature.objects.values_list('feature_type', flat=True).distinct())
             
             # Create feature column names
             self.feature_columns = (
-                [f"dining_{s}" for s in dining_styles] + 
-                [f"price_{p}" for p in price_ranges] + 
-                [f"feature_{f}" for f in features]
+                [f"dining_{s}" for s in dining_styles if s] +
+                [f"price_{p}" for p in price_ranges if p] +
+                [f"feature_{f}" for f in features if f]
             )
             
             return True
@@ -47,7 +47,8 @@ class RestaurantRecommender:
         
         try:
             user = User.objects.get(id=user_id)
-            establishments = Establishment.objects.filter(user=user)
+            # Optimize: Prefetch features to avoid N+1 query
+            establishments = Establishment.objects.filter(user=user).prefetch_related('features')
             
             # Track feature frequencies
             dining_styles = {}
@@ -295,31 +296,42 @@ class RestaurantRecommender:
         # Get user preferences vector
         user_vector = self.get_user_vector(user_id)
         
-        # Get all establishments
-        all_establishments = Establishment.objects.all()
+        # Optimize: Filter by bounding box first using DB queries
+        # 1 degree latitude ~= 111 km
+        # 1 degree longitude ~= 111 km * cos(lat)
+        try:
+            lat_float = float(lat)
+            lon_float = float(lon)
+
+            lat_delta = radius_km / 111.0
+            lon_delta = radius_km / (111.0 * abs(math.cos(math.radians(lat_float))))
+
+            # Bounding box filter
+            candidates = Establishment.objects.filter(
+                latitude__range=(lat_float - lat_delta, lat_float + lat_delta),
+                longitude__range=(lon_float - lon_delta, lon_float + lon_delta)
+            ).prefetch_related('features')
+
+        except (ValueError, TypeError):
+            return []
         
-        if not all_establishments:
+        if not candidates.exists():
             return []
             
-        # Filter by coordinates (simplified implementation)
-        # In production, use geodjango or postgis for proper spatial queries
+        # Refine by exact distance and rank
         nearby_establishments = []
-        for est in all_establishments:
-            # Skip establishments without coordinate data
+        for est in candidates:
             if not est.latitude or not est.longitude:
                 continue
                 
-            # Simple haversine distance calculation
             distance = self._calculate_distance(
-                float(lat), float(lon), 
+                lat_float, lon_float,
                 float(est.latitude), float(est.longitude)
             )
             
-            # Add if within radius
             if distance <= radius_km:
                 nearby_establishments.append(est)
         
-        # If no nearby establishments found, return empty list
         if not nearby_establishments:
             return []
             

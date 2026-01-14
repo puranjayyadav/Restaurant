@@ -65,6 +65,8 @@ urlpatterns = [
     path('api/get-hotspot-itinerary/', get_hotspot_itinerary, name='get_hotspot_itinerary'),
     path('api/generate-itinerary/', generate_itinerary, name='api-generate-itinerary'),
     path('api/itinerary-details/', itinerary_details, name='api-itinerary-details'),
+    path('api/parse-query/', parse_query, name='api-parse-query'),
+    path('api/geocode-location/', geocode_location, name='api-geocode-location'),
     path('search-venues/', search_venues, name='api-search-venues'),
     # Saved Itineraries endpoints
     path('api/save-itinerary/', save_itinerary, name='api-save-itinerary'),

@@ -68,3 +68,5 @@ Thumbs.db
 *.bak
 node_modules
 node_modules
+google-services.json
+debug_page.html

@@ -56,7 +56,7 @@ class ApiService {
   // API Base URL - change this when deploying
   static const String BASE_URL = 'https://your-app.railway.app';
   
-  final String googleApiKey = 'AIzaSyCqeTKWDSpdukY0rG3_0jipiGY1W5UU_28';
+  final String googleApiKey = 'YOUR_API_KEY_HERE';
   
   // Then use it in your methods:
   Future<Map<String, dynamic>> generateDayItinerary(...) async {

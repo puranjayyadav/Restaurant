@@ -8,7 +8,7 @@ import 'dart:math';
 import 'dart:async';
 
 class ApiService {
-  final String googleApiKey = 'AIzaSyCqeTKWDSpdukY0rG3_0jipiGY1W5UU_28';
+  final String googleApiKey = const String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 
   Future<Map<String, dynamic>?> fetchPlaceDetails(String placeId) async {
     try {
@@ -96,20 +96,8 @@ class ApiService {
   static const String supabaseUrl =
       'https://diytyziczzosylmyrfxo.supabase.co/rest/v1';
   // Set a publishable/anon key via --dart-define=SUPABASE_ANON_KEY=...
-  // Fallback for development (DO NOT use in production - set via --dart-define instead)
   static String get supabaseAnonKey {
-    final envKey =
-        const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
-    if (envKey.isNotEmpty) {
-      return envKey;
-    }
-    // Development fallback - remove this in production builds
-    // For production, always use: flutter run --dart-define=SUPABASE_ANON_KEY=your_key_here
-    const devFallback =
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpeXR5emljenpvc3lsbXlyZnhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ4NjYzOTMsImV4cCI6MjA4MDQ0MjM5M30.2Wet_5E82ippon8oDCvCV8X1g0POrO6uwUq9B5jgSr4';
-    // Use fallback in development (when env key is not set)
-    // In production, always set SUPABASE_ANON_KEY via --dart-define
-    return devFallback;
+    return const String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
   }
 
   // Backend URL - Automatically switches between local and production

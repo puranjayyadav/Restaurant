@@ -107,6 +107,123 @@ if not firebase_admin._apps:
 # Get a Firestore client
 db = firestore.client() if cred else None
 
+# ============================================================================
+# Dynamic Vibe Slugs Cache
+# ============================================================================
+import time as _time_module
+
+_vibe_slugs_cache = {
+    "vibes": [],
+    "cuisine_groups": {},
+    "last_fetched": None
+}
+_VIBE_CACHE_TTL_SECONDS = 3600  # 1 hour cache
+
+
+def _get_fallback_vibes():
+    """Return hardcoded fallback vibes if database is unavailable."""
+    fallback_vibes = [
+        "aesthetic", "art_house", "australian_cafe", "bakery_cafe", "board_games",
+        "breakfast_classic", "brunch_buzzy", "burger_joint", "casual_lunch", "coffee",
+        "coffee_run", "dark_academia", "dinner_date", "dinner_group", "dive_bar",
+        "fine_dining", "french_bistro", "italian_red_sauce", "japanese_izakaya",
+        "korean_bbq", "late_night_eats", "listening_bar", "minimalist", "natural_wine",
+        "new_american", "pizza_nyc", "ramen_shop", "retro_vintage", "rooftop",
+        "solo_date", "soul_food", "speakeasy", "steakhouse", "sushi_restaurant",
+        "taco_stand", "tea_sanctuary", "thai_isan", "urban_jungle", "vegan_cafe",
+        "vietnamese", "work_friendly"
+    ]
+    cuisine_groups = {
+        'indian': ['indian_north', 'indian_south', 'indian_north_aesthetic', 'indian_south_aesthetic'],
+        'korean': ['korean_bbq', 'korean_pocha', 'korean_bbq_aesthetic', 'korean_pocha_aesthetic'],
+        'japanese': ['japanese_izakaya', 'japanese_sushi', 'japanese_izakaya_aesthetic', 'japanese_sushi_aesthetic', 'ramen_shop', 'sushi_restaurant'],
+        'italian': ['italian_red_sauce', 'italian_regional', 'italian_red_sauce_aesthetic', 'italian_regional_aesthetic', 'pasta_house', 'pizza_nyc'],
+        'chinese': ['chinese_cantonese', 'chinese_sichuan', 'chinese_xian', 'chinese_dumplings', 'dim_sum_house'],
+        'thai': ['thai_isan', 'thai_restaurant', 'thai_isan_aesthetic'],
+        'vietnamese': ['vietnamese', 'vietnamese_aesthetic', 'pho_restaurant'],
+        'french': ['french_bistro', 'french_bistro_aesthetic'],
+        'greek': ['greek_taverna', 'greek_taverna_aesthetic'],
+        'mexican': ['mexican_street', 'mexican_street_aesthetic', 'taco_stand', 'taco_truck', 'burrito_place'],
+    }
+    return fallback_vibes, cuisine_groups
+
+
+def get_cached_vibe_slugs():
+    """
+    Fetch and cache all distinct vibe_slugs from venue_vibes table.
+    Returns tuple of (all_vibe_slugs, cuisine_groups).
+    Cache TTL is 1 hour.
+    """
+    global _vibe_slugs_cache
+    
+    now = _time_module.time()
+    if (_vibe_slugs_cache["vibes"] and 
+        _vibe_slugs_cache["last_fetched"] and 
+        now - _vibe_slugs_cache["last_fetched"] < _VIBE_CACHE_TTL_SECONDS):
+        print(f"DEBUG: Using cached vibe slugs ({len(_vibe_slugs_cache['vibes'])} vibes)")
+        return _vibe_slugs_cache["vibes"], _vibe_slugs_cache["cuisine_groups"]
+    
+    try:
+        from supabase_config import get_supabase_client
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            print("DEBUG: Supabase unavailable, using fallback vibes")
+            return _get_fallback_vibes()
+        
+        # Fetch all distinct vibe slugs
+        result = supabase.table("venue_vibes").select("vibe_slug").execute()
+        
+        if not result.data:
+            print("DEBUG: No vibes returned from database, using fallback")
+            return _get_fallback_vibes()
+        
+        # Extract unique slugs
+        all_vibes = sorted(list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')])))
+        print(f"DEBUG: Fetched {len(all_vibes)} unique vibe slugs from database")
+        
+        # Build cuisine groups dynamically
+        cuisine_keywords = {
+            'indian': ['indian'],
+            'korean': ['korean'],
+            'japanese': ['japanese', 'sushi', 'ramen'],
+            'italian': ['italian', 'pasta', 'pizza'],
+            'chinese': ['chinese', 'dim_sum', 'dumpling'],
+            'thai': ['thai'],
+            'vietnamese': ['vietnamese', 'pho'],
+            'french': ['french'],
+            'greek': ['greek'],
+            'mexican': ['mexican', 'taco', 'burrito'],
+            'caribbean': ['caribbean', 'jamaican'],
+            'colombian': ['colombian'],
+            'peruvian': ['peruvian'],
+            'russian': ['russian'],
+            'eastern_european': ['eastern_european'],
+            'middle_eastern': ['middle_eastern'],
+            'soul_food': ['soul_food'],
+            'halal': ['halal'],
+            'jewish': ['jewish', 'deli'],
+        }
+        
+        cuisine_groups = {}
+        for cuisine_type, keywords in cuisine_keywords.items():
+            cuisine_groups[cuisine_type] = [
+                slug for slug in all_vibes 
+                if any(kw in slug.lower() for kw in keywords)
+            ]
+        
+        # Update cache
+        _vibe_slugs_cache["vibes"] = all_vibes
+        _vibe_slugs_cache["cuisine_groups"] = cuisine_groups
+        _vibe_slugs_cache["last_fetched"] = now
+        
+        return all_vibes, cuisine_groups
+        
+    except Exception as e:
+        print(f"ERROR: Failed to fetch vibe slugs: {e}")
+        return _get_fallback_vibes()
+
+
 @api_view(['POST'])
 @authentication_classes([])  # Disable DRF's token authentication for this endpoint
 def verify_token(request):
@@ -3848,23 +3965,12 @@ def generate_itinerary(request):
         # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
         if selected_vibe is None:
             import random
-            from supabase_config import get_supabase_client
-            supabase = get_supabase_client()
-            if supabase:
-                try:
-                    result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
-                    if result.data:
-                        available_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
-                        if available_vibes:
-                            selected_vibe = random.choice(available_vibes)
-                            print(f"DEBUG: Randomized selected_vibe to: {selected_vibe}")
-                except Exception as e:
-                    print(f"Could not fetch vibes for randomization: {e}")
-                    # Fallback to common vibes
-                    common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
-                    selected_vibe = random.choice(common_vibes)
+            cached_vibes, _ = get_cached_vibe_slugs()
+            if cached_vibes:
+                selected_vibe = random.choice(cached_vibes)
+                print(f"DEBUG: Randomized selected_vibe to: {selected_vibe}")
             else:
-                # Fallback to common vibes
+                # Fallback to common vibes if cache fails
                 common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
                 selected_vibe = random.choice(common_vibes)
         
@@ -4095,65 +4201,10 @@ def parse_query(request):
                   config('OPENROUTER_API_KEY', default=''))
         model = config('OPENROUTER_CHAT_MODEL', default='xiaomi/mimo-v2-flash:free')
         
-        # Get available vibe slugs from venue_vibes table
-        from supabase_config import get_supabase_client
-        supabase = get_supabase_client()
+        # Get available vibe slugs from cached database query
+        all_vibe_slugs, cuisine_groups = get_cached_vibe_slugs()
         
-        # Use complete list of known vibe slugs (cached from database analysis)
-        # This avoids expensive pagination queries on every request (50k+ rows)
-        all_vibe_slugs = [
-            "aesthetic", "art_house", "australian_cafe", "australian_cafe_aesthetic", "bakery_cafe",
-            "board_games", "breakfast_classic", "brunch_buzzy", "caribbean_jamaican", "caribbean_jamaican_aesthetic",
-            "casual_lunch", "chinese_cantonese", "chinese_cantonese_aesthetic", "chinese_sichuan", "chinese_sichuan_aesthetic",
-            "chinese_xian", "chinese_xian_aesthetic", "coffee", "coffee_run", "colombian", "colombian_aesthetic",
-            "dark_academia", "dinner_date", "dinner_group", "dive_bar", "dominican", "dominican_aesthetic",
-            "eastern_european", "eastern_european_aesthetic", "ethiopian", "ethiopian_aesthetic", "fine_dining",
-            "french_bistro", "french_bistro_aesthetic", "greek_taverna", "greek_taverna_aesthetic", "halal_cart",
-            "halal_cart_aesthetic", "indian_north", "indian_north_aesthetic", "indian_south", "indian_south_aesthetic",
-            "italian_red_sauce", "italian_red_sauce_aesthetic", "italian_regional", "italian_regional_aesthetic",
-            "japanese_izakaya", "japanese_izakaya_aesthetic", "japanese_sushi_aesthetic", "jewish_deli",
-            "jewish_deli_aesthetic", "korean_bbq", "korean_bbq_aesthetic", "korean_pocha", "korean_pocha_aesthetic",
-            "late_night_eats", "listening_bar", "mexican_street_aesthetic", "middle_eastern", "middle_eastern_aesthetic",
-            "minimalist", "natural_wine", "new_american", "new_american_aesthetic", "peruvian_aesthetic",
-            "pizza_nyc", "pizza_nyc_aesthetic", "puerto_rican", "puerto_rican_aesthetic", "retro_vintage",
-            "rooftop", "russian", "russian_aesthetic", "senegalese", "senegalese_aesthetic", "solo_date",
-            "soul_food", "soul_food_aesthetic", "speakeasy", "tea_sanctuary", "test_pizza", "thai_isan",
-            "thai_isan_aesthetic", "urban_jungle", "uzbek", "uzbek_aesthetic", "vietnamese", "vietnamese_aesthetic",
-            "work_friendly"
-        ]
-        
-        cuisine_groups = {}  # Group cuisine slugs by cuisine type
-        
-        # Group cuisine-related slugs by cuisine type
-        cuisine_keywords = {
-            'indian': ['indian'],
-            'korean': ['korean'],
-            'japanese': ['japanese'],
-            'italian': ['italian'],
-            'chinese': ['chinese'],
-            'thai': ['thai'],
-            'vietnamese': ['vietnamese'],
-            'french': ['french'],
-            'greek': ['greek'],
-            'caribbean': ['caribbean'],
-            'colombian': ['colombian'],
-            'peruvian': ['peruvian'],
-            'russian': ['russian'],
-            'eastern_european': ['eastern_european'],
-            'middle_eastern': ['middle_eastern'],
-            'soul_food': ['soul_food'],
-            'pizza': ['pizza'],
-            'halal': ['halal'],
-            'jewish': ['jewish']
-        }
-        
-        for cuisine_type, keywords in cuisine_keywords.items():
-            cuisine_groups[cuisine_type] = [
-                slug for slug in all_vibe_slugs 
-                if any(kw in slug.lower() for kw in keywords)
-            ]
-        
-        print(f"DEBUG: Using {len(all_vibe_slugs)} cached vibe slugs")
+        print(f"DEBUG: Using {len(all_vibe_slugs)} vibe slugs from cache")
         print(f"DEBUG: Indian cuisine slugs: {cuisine_groups.get('indian', [])}")
         
         # Build cuisine slugs list for LLM prompt
@@ -4190,8 +4241,8 @@ def parse_query(request):
         
         system_prompt = f"""You are a query parser for a day planner app. Extract structured parameters from natural language queries.
 
-Available vibe slugs: {', '.join(all_vibe_slugs[:50])}
-Available cuisine slugs: {', '.join(cuisine_slugs[:50])}
+Available vibe slugs: {', '.join(all_vibe_slugs)}
+Available cuisine slugs: {', '.join(cuisine_slugs)}
 
 IMPORTANT VIBE MAPPING RULES:
 - "romantic", "date night", "date", "romantic dinner" -> selected_vibe: "dinner_date", social_context: "couple"
@@ -4323,23 +4374,14 @@ Return ONLY the JSON object, no markdown, no explanations."""
             
             # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
             if parsed.get('selected_vibe') is None:
-                # Get random vibe from available vibes
+                # Get random vibe from cached vibes
                 import random
-                if supabase:
-                    try:
-                        result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
-                        if result.data:
-                            available_vibes = list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')]))
-                            if available_vibes:
-                                parsed['selected_vibe'] = random.choice(available_vibes)
-                                print(f"DEBUG: Randomized selected_vibe to: {parsed['selected_vibe']}")
-                    except Exception as e:
-                        print(f"Could not fetch vibes for randomization: {e}")
-                        # Fallback to common vibes
-                        common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
-                        parsed['selected_vibe'] = random.choice(common_vibes)
+                cached_vibes, _ = get_cached_vibe_slugs()
+                if cached_vibes:
+                    parsed['selected_vibe'] = random.choice(cached_vibes)
+                    print(f"DEBUG: Randomized selected_vibe to: {parsed['selected_vibe']}")
                 else:
-                    # Fallback to common vibes
+                    # Fallback to common vibes if cache fails
                     common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
                     parsed['selected_vibe'] = random.choice(common_vibes)
             
@@ -4411,23 +4453,17 @@ Return ONLY the JSON object, no markdown, no explanations."""
             # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
             if result.get("selected_vibe") is None:
                 import random
-                from supabase_config import get_supabase_client
-                supabase = get_supabase_client()
-                if supabase:
-                    try:
-                        vibe_result = supabase.table("venue_vibes").select("vibe_slug").limit(100).execute()
-                        if vibe_result.data:
-                            available_vibes = list(set([v.get('vibe_slug') for v in vibe_result.data if v.get('vibe_slug')]))
-                            if available_vibes:
-                                result["selected_vibe"] = random.choice(available_vibes)
-                                print(f"DEBUG: Randomized selected_vibe to: {result['selected_vibe']}")
-                    except Exception as e:
-                        print(f"Could not fetch vibes for randomization: {e}")
-                        # Fallback to common vibes
-                        common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
-                        result["selected_vibe"] = random.choice(common_vibes)
+                cached_vibes, cached_cuisine_groups = get_cached_vibe_slugs()
+                if cached_vibes:
+                    result["selected_vibe"] = random.choice(cached_vibes)
+                    print(f"DEBUG: Randomized selected_vibe to: {result['selected_vibe']}")
+                    # Also expand cuisine preferences using cached groups
+                    for cuisine_type, slugs in cached_cuisine_groups.items():
+                        if any(kw in query_lower for kw in [cuisine_type]):
+                            result["cuisine_preferences"] = slugs
+                            break
                 else:
-                    # Fallback to common vibes
+                    # Fallback to common vibes if cache fails
                     common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
                     result["selected_vibe"] = random.choice(common_vibes)
             

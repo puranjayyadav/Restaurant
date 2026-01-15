@@ -167,6 +167,7 @@ class _NeighborhoodCard extends StatelessWidget {
               collectionId: neighborhood.id,
               collectionName: neighborhood.name,
               neighborhood: neighborhood.neighborhood,
+              imageUrl: neighborhood.image,
             ),
           ),
         );

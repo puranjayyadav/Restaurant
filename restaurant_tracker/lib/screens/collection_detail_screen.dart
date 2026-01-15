@@ -7,12 +7,14 @@ class CollectionDetailScreen extends StatefulWidget {
   final String collectionId;
   final String collectionName;
   final String? neighborhood;
+  final String? imageUrl;
 
   const CollectionDetailScreen({
     super.key,
     required this.collectionId,
     required this.collectionName,
     this.neighborhood,
+    this.imageUrl,
   });
 
   @override
@@ -102,7 +104,7 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
           fit: StackFit.expand,
           children: [
             Image.network(
-              'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=800&q=80', // Replace with dynamic image if available
+              widget.imageUrl ?? 'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=800&q=80',
               fit: BoxFit.cover,
               errorBuilder: (context, error, stackTrace) => Container(
                 color: PlanditColors.secondary,

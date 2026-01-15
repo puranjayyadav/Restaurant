@@ -207,84 +207,197 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Image Header
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: SizedBox(
-              height: 180,
+              height: 200,
               width: double.infinity,
-              child: Image.network(
-                'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80', // Placeholder
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => Container(
-                  color: PlanditColors.secondary,
-                  child: const Center(
-                    child: Icon(Icons.restaurant, size: 48, color: PlanditColors.mutedForeground),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80', // Replace with dynamic if available
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: PlanditColors.secondary,
+                      child: const Center(
+                        child: Icon(Icons.restaurant, size: 48, color: PlanditColors.mutedForeground),
+                      ),
+                    ),
                   ),
-                ),
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: CircleAvatar(
+                      backgroundColor: Colors.white.withOpacity(0.9),
+                      child: const Icon(Icons.bookmark_border, color: PlanditColors.primary),
+                    ),
+                  ),
+                  if (item['neighborhood'] != null)
+                    Positioned(
+                      bottom: 16,
+                      left: 16,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.6),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          item['neighborhood'].toString().toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
+          
           Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Title and Cuisine
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: Text(
                         item['name'] ?? 'Unknown Restaurant',
                         style: GoogleFonts.playfairDisplay(
-                          fontSize: 22,
+                          fontSize: 24,
                           fontWeight: FontWeight.w400,
                           color: PlanditColors.foreground,
                         ),
                       ),
                     ),
-                    const Icon(Icons.bookmark_border, color: PlanditColors.primary),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(Icons.restaurant, size: 14, color: PlanditColors.mutedForeground),
-                    const SizedBox(width: 4),
-                    Text(
-                      item['cuisine'] ?? 'Cuisine',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: PlanditColors.mutedForeground,
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: PlanditColors.secondary,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        item['cuisine'] ?? 'Eatery',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: PlanditColors.primary,
+                        ),
                       ),
                     ),
                   ],
                 ),
+                
                 const SizedBox(height: 16),
+                
+                // Primary Draw & Vibe
+                Row(
+                  children: [
+                    if (item['primary_draw'] != null) ...[
+                      const Icon(Icons.star_outline, size: 16, color: Colors.orange),
+                      const SizedBox(width: 6),
+                      Text(
+                        item['primary_draw'].toString(),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: PlanditColors.foreground,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                    ],
+                    if (item['vibe'] != null) ...[
+                      const Icon(Icons.auto_awesome_outlined, size: 16, color: PlanditColors.primary),
+                      const SizedBox(width: 6),
+                      Text(
+                        item['vibe'].toString(),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: PlanditColors.mutedForeground,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                
+                const SizedBox(height: 20),
+                
+                // Community Perception (Featured Quote style)
+                if (item['community_perception'] != null)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: PlanditColors.secondary.withOpacity(0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: PlanditColors.primary.withOpacity(0.1)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.format_quote, color: PlanditColors.primary, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            item['community_perception'],
+                            style: GoogleFonts.mulish(
+                              fontSize: 14,
+                              fontStyle: FontStyle.italic,
+                              color: PlanditColors.foreground,
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                const SizedBox(height: 20),
+                
+                // Summary Description
                 Text(
-                  item['summary'] ?? 'No summary available.',
+                  item['summary'] ?? 'Discover this unique local gem.',
                   style: const TextStyle(
                     fontSize: 14,
                     color: PlanditColors.mutedForeground,
-                    height: 1.5,
+                    height: 1.6,
                   ),
-                  maxLines: 3,
+                  maxLines: 4,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 20),
+                
+                const SizedBox(height: 24),
+                
+                // CTA
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () {},
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: PlanditColors.primary,
+                      backgroundColor: PlanditColors.foreground,
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
-                    child: const Text('View Details'),
+                    child: Text(
+                      'Explore Details',
+                      style: GoogleFonts.mulish(
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
                   ),
                 ),
               ],

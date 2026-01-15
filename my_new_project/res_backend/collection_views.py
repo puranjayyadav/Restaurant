@@ -112,7 +112,11 @@ def get_collection_by_id(request, collection_id):
                 ci.*, 
                 ra.establishment as name,
                 ra.cuisine,
-                ra.community_perception as summary
+                ra.primary_draw,
+                ra.community_perception,
+                ra.neighborhood,
+                ra.vibe,
+                ra.app_ready_description as summary
             FROM collection_items ci
             LEFT JOIN restaurant_analysis ra ON ci.restaurant_id::text = ra.id::text
             WHERE ci.collection_id = %s

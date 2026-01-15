@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme/plandit_design_system.dart';
-import '../../screens/venue_search_screen.dart';
+import '../../screens/restaurant_search_screen.dart';
 
 class PlanditSearchBar extends StatelessWidget {
   final Function(String)? onSubmitted;
@@ -13,7 +13,7 @@ class PlanditSearchBar extends StatelessWidget {
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => const VenueSearchScreen(),
+            builder: (context) => const RestaurantSearchScreen(),
           ),
         );
       },
@@ -39,7 +39,7 @@ class PlanditSearchBar extends StatelessWidget {
                 child: TextField(
                   onSubmitted: onSubmitted,
                   decoration: const InputDecoration(
-                    hintText: 'Search destinations, itineraries...',
+                    hintText: 'Search curated guides, cuisines...',
                     hintStyle: TextStyle(
                       color: PlanditColors.mutedForeground,
                       fontSize: 14,

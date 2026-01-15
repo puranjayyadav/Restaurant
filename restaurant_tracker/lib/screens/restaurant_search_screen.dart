@@ -76,6 +76,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _hasSearched = true;
     });
 
     try {
@@ -174,21 +175,87 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator(color: PlanditColors.accent));
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: PlanditColors.accent),
+            SizedBox(height: 16),
+            Text('Browsing our curated guides...', style: TextStyle(color: PlanditColors.mutedForeground)),
+          ],
+        ),
+      );
     }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              const SizedBox(height: 16),
+              Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: PlanditColors.foreground)),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => _performSearch(_searchController.text),
+                child: const Text('Retry Search'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (!_hasSearched) {
       return _buildEmptyState();
     }
+
     if (_results.isEmpty) {
-      return const Center(child: Text('No curated restaurants found.'));
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.search_off, size: 48, color: PlanditColors.mutedForeground),
+            const SizedBox(height: 16),
+            const Text('No curated spots found matching your query.', style: TextStyle(color: PlanditColors.mutedForeground)),
+            const SizedBox(height: 8),
+            const Text('Try searching by neighborhood or cuisine.', style: TextStyle(color: PlanditColors.mutedForeground, fontSize: 12)),
+          ],
+        ),
+      );
     }
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _results.length,
-      itemBuilder: (context, index) {
-        final restaurant = _results[index];
-        return _buildRestaurantCard(restaurant);
-      },
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                '${_results.length} CURATED SPOTS FOUND',
+                style: GoogleFonts.mulish(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: PlanditColors.mutedForeground,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: _results.length,
+            itemBuilder: (context, index) {
+              final restaurant = _results[index];
+              return _buildRestaurantCard(restaurant);
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -254,16 +321,20 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
               children: [
                 const Icon(Icons.restaurant, size: 14, color: PlanditColors.accentGold),
                 const SizedBox(width: 8),
-                Text(
-                  restaurant['cuisine'] ?? 'Cuisine',
-                  style: GoogleFonts.mulish(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: PlanditColors.accentGold,
-                    letterSpacing: 0.5,
+                Expanded(
+                  child: Text(
+                    restaurant['cuisine'] ?? 'Cuisine',
+                    style: GoogleFonts.mulish(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: PlanditColors.accentGold,
+                      letterSpacing: 0.5,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 12),
                 if (restaurant['neighborhood'] != null)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -278,6 +349,8 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
                         fontWeight: FontWeight.w700,
                         color: PlanditColors.primary,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
               ],
@@ -304,11 +377,15 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
                       children: [
                         const Icon(Icons.auto_awesome_outlined, size: 14, color: PlanditColors.mutedForeground),
                         const SizedBox(width: 6),
-                        Text(
-                          restaurant['vibe'],
-                          style: GoogleFonts.mulish(
-                            fontSize: 13,
-                            color: PlanditColors.mutedForeground,
+                        Expanded(
+                          child: Text(
+                            restaurant['vibe'],
+                            style: GoogleFonts.mulish(
+                              fontSize: 13,
+                              color: PlanditColors.mutedForeground,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
@@ -330,7 +407,10 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     if (restaurant['primary_draw'] != null)
-                      _buildMiniBadge(restaurant['primary_draw']),
+                      Flexible(
+                        child: _buildMiniBadge(restaurant['primary_draw']),
+                      ),
+                    const SizedBox(width: 12),
                     Text(
                       'EXPLORE DETAILS',
                       style: GoogleFonts.mulish(
@@ -365,6 +445,8 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
           fontWeight: FontWeight.bold,
           color: PlanditColors.mutedForeground,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

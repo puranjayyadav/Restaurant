@@ -234,9 +234,10 @@ class ApiService {
     String? cuisine,
     String? neighborhood,
     int limit = 20,
+    int offset = 0,
   }) async {
     try {
-      String url = '$baseUrl/api/restaurants/search/?q=${Uri.encodeComponent(query)}&limit=$limit';
+      String url = '$baseUrl/api/restaurants/search/?q=${Uri.encodeComponent(query)}&limit=$limit&offset=$offset';
       if (cuisine != null) {
         url += '&cuisine=${Uri.encodeComponent(cuisine)}';
       }

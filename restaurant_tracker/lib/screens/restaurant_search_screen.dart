@@ -39,13 +39,37 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
     'Natural Wine',
   ];
 
+  // Pagination state
+  final ScrollController _scrollController = ScrollController();
+  int _currentOffset = 0;
+  bool _isLoadingMore = false;
+  bool _canLoadMore = true;
+  final int _limit = 20;
+
   @override
   void initState() {
     super.initState();
     _fetchLovedRecommendations();
+    _scrollController.addListener(_onScroll);
     if (widget.initialQuery != null && widget.initialQuery!.isNotEmpty) {
       _searchController.text = widget.initialQuery!;
       _performSearch(widget.initialQuery!);
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _debounceTimer?.cancel();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      if (!_isLoadingMore && _canLoadMore && _results.isNotEmpty) {
+        _loadMore();
+      }
     }
   }
 
@@ -169,14 +193,24 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
       _isLoading = true;
       _errorMessage = null;
       _hasSearched = true;
+      _currentOffset = 0;
+      _canLoadMore = true;
     });
 
     try {
-      final results = await _apiService.searchRestaurants(query: query);
+      final results = await _apiService.searchRestaurants(
+        query: query,
+        limit: _limit,
+        offset: 0,
+      );
       if (mounted) {
         setState(() {
           _results = results;
           _isLoading = false;
+          _currentOffset = results.length;
+          if (results.length < _limit) {
+            _canLoadMore = false;
+          }
         });
       }
     } catch (e) {
@@ -185,6 +219,40 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
           _errorMessage = 'Failed to search curated restaurants.';
           _isLoading = false;
           _results = [];
+        });
+      }
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final query = _searchController.text;
+    if (query.trim().isEmpty || _isLoadingMore || !_canLoadMore) return;
+
+    setState(() {
+      _isLoadingMore = true;
+    });
+
+    try {
+      final nextResults = await _apiService.searchRestaurants(
+        query: query,
+        limit: _limit,
+        offset: _currentOffset,
+      );
+
+      if (mounted) {
+        setState(() {
+          _results.addAll(nextResults);
+          _isLoadingMore = false;
+          _currentOffset += nextResults.length;
+          if (nextResults.length < _limit) {
+            _canLoadMore = false;
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
         });
       }
     }
@@ -339,9 +407,21 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
         ),
         Expanded(
           child: ListView.builder(
+            controller: _scrollController,
             padding: const EdgeInsets.all(16),
-            itemCount: _results.length,
+            itemCount: _results.length + (_isLoadingMore ? 1 : 0),
             itemBuilder: (context, index) {
+              if (index == _results.length) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      color: PlanditColors.accent,
+                      strokeWidth: 2,
+                    ),
+                  ),
+                );
+              }
               final restaurant = _results[index];
               return _buildRestaurantCard(restaurant);
             },

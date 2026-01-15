@@ -315,6 +315,7 @@ def search_restaurants(request):
     - cuisine: Filter by cuisine (exact)
     - neighborhood: Filter by neighborhood (exact)
     - limit: Limit results (default: 20)
+    - offset: Offset for pagination (default: 0)
     
     Returns:
     - List of matching restaurant objects
@@ -324,6 +325,7 @@ def search_restaurants(request):
         cuisine = request.GET.get('cuisine')
         neighborhood = request.GET.get('neighborhood')
         limit = int(request.GET.get('limit', 20))
+        offset = int(request.GET.get('offset', 0))
         
         conn = get_cockroachdb_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -351,8 +353,8 @@ def search_restaurants(request):
             query += " AND neighborhood ILIKE %s"
             params.append(f"%{neighborhood}%")
             
-        query += " LIMIT %s"
-        params.append(limit)
+        query += " ORDER BY establishment LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
         
         cursor.execute(query, params)
         restaurants = cursor.fetchall()
@@ -363,6 +365,8 @@ def search_restaurants(request):
         return Response({
             "query": q,
             "count": len(restaurants),
+            "limit": limit,
+            "offset": offset,
             "restaurants": restaurants
         }, status=status.HTTP_200_OK)
         

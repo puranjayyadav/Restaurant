@@ -11,11 +11,11 @@ def test_filtered_collections():
         
         # Query collections with more than 2 items
         query = """
-            SELECT c.*, count(ci.id) as item_count
+            SELECT c.*, count(*) as item_count
             FROM collections c
             JOIN collection_items ci ON c.id = ci.collection_id
-            GROUP BY c.id
-            HAVING count(ci.id) > 2
+            GROUP BY c.id, c.name, c.description, c.neighborhood, c.created_at
+            HAVING count(*) > 2
             ORDER BY c.created_at DESC
         """
         cur.execute(query)

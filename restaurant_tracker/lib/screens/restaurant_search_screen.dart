@@ -7,6 +7,7 @@ import '../widgets/plandit/plandit_search_bar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
+import '../widgets/beautiful_snackbar.dart';
 
 class RestaurantSearchScreen extends StatefulWidget {
   final String? initialQuery;
@@ -77,12 +78,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   Future<void> _toggleLoveRecommendation(Map<String, dynamic> restaurant) async {
     final firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) {
-      ShadToaster.of(context).show(
-        const ShadToast(
-          title: Text('Sign in required'),
-          description: Text('Please sign in to save recommendations'),
-        ),
-      );
+      BeautifulSnackbar.showWarning(context, 'Please sign in to save recommendations');
       return;
     }
 
@@ -117,14 +113,11 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
       }
 
       if (mounted) {
-        ShadToaster.of(context).show(
-          ShadToast(
-            title: Text(isCurrentlyLoved ? 'Recommendation removed' : 'Recommendation saved'),
-            description: Text(isCurrentlyLoved 
-              ? 'Removed from your dashboard' 
-              : '${restaurant['establishment']} has been saved to your dashboard'),
-          ),
-        );
+        if (isCurrentlyLoved) {
+          BeautifulSnackbar.showInfo(context, 'Removed from dashboard');
+        } else {
+          BeautifulSnackbar.showSuccess(context, '✨ ${restaurant['establishment']} saved successfully! 💚');
+        }
       }
     } catch (e) {
       setState(() {
@@ -135,12 +128,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
         }
       });
       if (mounted) {
-        ShadToaster.of(context).show(
-          ShadToast.destructive(
-            title: const Text('Error saving'),
-            description: Text(e.toString()),
-          ),
-        );
+        BeautifulSnackbar.showError(context, 'Error saving: $e');
       }
     }
   }

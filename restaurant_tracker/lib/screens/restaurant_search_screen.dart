@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/plandit_design_system.dart';
 import '../api_service.dart';
 import '../widgets/plandit/plandit_search_bar.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class RestaurantSearchScreen extends StatefulWidget {
   final String? initialQuery;
@@ -22,6 +24,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   bool _hasSearched = false;
   String? _errorMessage;
   Timer? _debounceTimer;
+  final Set<String> _lovedRecommendationEstablishmentIds = {};
 
   // Suggested searches for empty state
   final List<String> _suggestedSearches = [
@@ -36,9 +39,91 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   @override
   void initState() {
     super.initState();
+    _fetchLovedRecommendations();
     if (widget.initialQuery != null && widget.initialQuery!.isNotEmpty) {
       _searchController.text = widget.initialQuery!;
       _performSearch(widget.initialQuery!);
+    }
+  }
+
+  Future<void> _fetchLovedRecommendations() async {
+    try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      if (firebaseUser == null) return;
+
+      final supabase = Supabase.instance.client;
+      // Note: We use the unique establishment identifier (usually id from cockroachdb)
+      // but in our search results it might be establishment name + neighborhood as a key if id isn't robust
+      // However, let's assume 'id' column from restaurant_analysis is passed.
+      final response = await supabase
+          .from('reccomendation_loves')
+          .select('establishment_id')
+          .eq('user_id', firebaseUser.uid);
+
+      if (mounted) {
+        final lovedIds = (response as List)
+            .map((item) => item['establishment_id'].toString())
+            .toSet();
+        setState(() {
+          _lovedRecommendationEstablishmentIds.addAll(lovedIds);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching loved recommendations: $e');
+    }
+  }
+
+  Future<void> _toggleLoveRecommendation(Map<String, dynamic> restaurant) async {
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+    if (firebaseUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in to save recommendations')),
+      );
+      return;
+    }
+
+    final establishmentId = restaurant['id']?.toString() ?? restaurant['establishment'];
+    if (establishmentId == null) return;
+
+    final isCurrentlyLoved = _lovedRecommendationEstablishmentIds.contains(establishmentId);
+
+    setState(() {
+      if (isCurrentlyLoved) {
+        _lovedRecommendationEstablishmentIds.remove(establishmentId);
+      } else {
+        _lovedRecommendationEstablishmentIds.add(establishmentId);
+      }
+    });
+
+    try {
+      final supabase = Supabase.instance.client;
+      if (isCurrentlyLoved) {
+        await supabase.from('reccomendation_loves').delete().match({
+          'user_id': firebaseUser.uid,
+          'establishment_id': establishmentId,
+        });
+      } else {
+        await supabase.from('reccomendation_loves').insert({
+          'user_id': firebaseUser.uid,
+          'establishment_id': establishmentId,
+          'establishment_name': restaurant['establishment'],
+          'cuisine': restaurant['cuisine'],
+          'neighborhood': restaurant['neighborhood'],
+        });
+      }
+    } catch (e) {
+      setState(() {
+        if (isCurrentlyLoved) {
+          _lovedRecommendationEstablishmentIds.add(establishmentId);
+        } else {
+          _lovedRecommendationEstablishmentIds.remove(establishmentId);
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -361,13 +446,33 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  restaurant['establishment'] ?? 'Unknown Restaurant',
-                  style: GoogleFonts.playfairDisplay(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w400,
-                    color: PlanditColors.foreground,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        restaurant['establishment'] ?? 'Unknown Restaurant',
+                        style: GoogleFonts.playfairDisplay(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w400,
+                          color: PlanditColors.foreground,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: () => _toggleLoveRecommendation(restaurant),
+                      child: Icon(
+                        _lovedRecommendationEstablishmentIds.contains(restaurant['id']?.toString() ?? restaurant['establishment'])
+                            ? Icons.favorite
+                            : Icons.favorite_border,
+                        color: _lovedRecommendationEstablishmentIds.contains(restaurant['id']?.toString() ?? restaurant['establishment'])
+                            ? Colors.red
+                            : PlanditColors.mutedForeground,
+                        size: 24,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 if (restaurant['vibe'] != null)

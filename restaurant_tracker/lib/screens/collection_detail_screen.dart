@@ -290,7 +290,6 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                         item['cuisine'] ?? 'Eatery',
                         style: const TextStyle(
                           fontSize: 11,
-                          fontWeight: FontWeight.w600,
                           color: PlanditColors.primary,
                         ),
                       ),
@@ -311,7 +310,6 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                           item['primary_draw'].toString(),
                           style: const TextStyle(
                             fontSize: 13,
-                            fontWeight: FontWeight.w600,
                             color: PlanditColors.foreground,
                           ),
                         ),

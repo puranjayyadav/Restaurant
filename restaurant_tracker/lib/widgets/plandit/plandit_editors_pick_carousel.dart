@@ -7,12 +7,14 @@ class EditorsPick {
   final String image;
   final String title;
   final String location;
+  final int placeCount;
 
   EditorsPick({
     required this.id,
     required this.image,
     required this.title,
     required this.location,
+    required this.placeCount,
   });
 }
 
@@ -22,27 +24,38 @@ class PlanditEditorsPickCarousel extends StatelessWidget {
   final List<EditorsPick> editorsPicks = [
     EditorsPick(
       id: 1,
-      image: "https://images.unsplash.com/photo-1534430480872-3498386e7856?w=400&h=500&fit=crop",
-      title: "Hidden Speakeasies",
-      location: "East Village",
+      image: "https://images.unsplash.com/photo-1565299585323-38d6b0865ef4?w=400&h=500&fit=crop",
+      title: "Mexican Fiesta",
+      location: "Lower East Side",
+      placeCount: 7,
     ),
     EditorsPick(
       id: 2,
-      image: "https://images.unsplash.com/photo-1555992336-03a23c7b20ee?w=400&h=500&fit=crop",
-      title: "Rooftop Gardens",
-      location: "Midtown",
+      image: "https://images.unsplash.com/photo-1551183053-bf91a1d81141?w=400&h=500&fit=crop",
+      title: "Italian Grand Tour",
+      location: "West Village",
+      placeCount: 6,
     ),
     EditorsPick(
       id: 3,
-      image: "https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=400&h=500&fit=crop",
-      title: "Jazz After Dark",
-      location: "Harlem",
+      image: "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=400&h=500&fit=crop",
+      title: "Date Night Gems",
+      location: "Brooklyn Heights",
+      placeCount: 5,
     ),
     EditorsPick(
       id: 4,
-      image: "https://images.unsplash.com/photo-1485871981521-5b1fd3805eee?w=400&h=500&fit=crop",
-      title: "Brooklyn Bridges",
-      location: "DUMBO",
+      image: "https://images.unsplash.com/photo-1493606278519-11aa9f86e40a?w=400&h=500&fit=crop",
+      title: "Late Night NYC",
+      location: "Chelsea",
+      placeCount: 7,
+    ),
+    EditorsPick(
+      id: 5,
+      image: "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=400&h=500&fit=crop",
+      title: "Hidden Speakeasies",
+      location: "East Village",
+      placeCount: 6,
     ),
   ];
 
@@ -78,6 +91,7 @@ class PlanditEditorsPickCarousel extends StatelessWidget {
         SizedBox(
           height: 200,
           child: ListView.separated(
+            clipBehavior: Clip.none,
             scrollDirection: Axis.horizontal,
             itemCount: editorsPicks.length,
             separatorBuilder: (context, index) => const SizedBox(width: 12),
@@ -121,8 +135,8 @@ class _PickCard extends StatelessWidget {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    PlanditColors.foreground.withOpacity(0.7),
-                    PlanditColors.foreground.withOpacity(0.2),
+                    PlanditColors.foreground.withOpacity(0.8),
+                    PlanditColors.foreground.withOpacity(0.3),
                     Colors.transparent,
                   ],
                 ),
@@ -134,6 +148,23 @@ class _PickCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: PlanditColors.accent.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${pick.placeCount} PLACES',
+                      style: GoogleFonts.mulish(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
                   Text(
                     pick.title,
                     style: GoogleFonts.playfairDisplay(

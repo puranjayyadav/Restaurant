@@ -7,6 +7,7 @@ import '../widgets/plandit/plandit_category_pills.dart';
 import '../widgets/plandit/plandit_creator_leaderboard.dart';
 import '../widgets/plandit/plandit_editors_pick_carousel.dart';
 import '../widgets/plandit/plandit_itinerary_card.dart';
+import '../widgets/plandit/plandit_restaurant_search_bar.dart';
 
 class PlanditIndexScreen extends StatelessWidget {
   const PlanditIndexScreen({super.key});
@@ -24,6 +25,7 @@ class PlanditIndexScreen extends StatelessWidget {
             const SizedBox(height: 16),
             const PlanditSearchBar(),
             const PlanditCategoryPills(),
+            const PlanditRestaurantSearchBar(),
             PlanditCreatorLeaderboard(),
             PlanditEditorsPickCarousel(),
             

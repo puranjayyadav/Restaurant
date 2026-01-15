@@ -15,7 +15,8 @@ async function scrapeReviewsByPlaceId(placeId, maxReviews = 5) {
     console.log(`\n🔍 Opening place with ID: ${placeId}`);
 
     const browser = await puppeteer.launch({
-        headless: true,  // Now works with stealth!
+        headless: false,  // Now works with stealth!
+        slowMo: 50,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -43,9 +44,25 @@ async function scrapeReviewsByPlaceId(placeId, maxReviews = 5) {
 
         // REFRESH TO LOAD REVIEWS
         console.log('🔄 Refreshing page to load reviews...');
-        await page.reload({ waitUntil: 'networkidle2' });
         await delay(5000);
         console.log('✅ Page refreshed\n');
+
+        // Scrape total review count from header (before clicking Reviews tab)
+        let totalReviewCount = null;
+        try {
+            totalReviewCount = await page.evaluate(() => {
+                const el = document.querySelector('span[role="img"][aria-label*="reviews"]');
+                if (el) {
+                    const label = el.getAttribute('aria-label');
+                    const match = label.match(/([\d,]+)/);
+                    return match ? parseInt(match[1].replace(/,/g, '')) : null;
+                }
+                return null;
+            });
+            console.log(`📊 Total reviews: ${totalReviewCount || 'Unknown'}\n`);
+        } catch (e) {
+            // Skip
+        }
 
         // Click Reviews tab
         console.log('📋 Looking for Reviews tab...');
@@ -164,7 +181,10 @@ async function scrapeReviewsByPlaceId(placeId, maxReviews = 5) {
 }
 
 // Run if called directly
-const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+import path from 'path';
+const isMainModule = process.argv[1] && (
+    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+);
 
 if (isMainModule) {
     const placeId = process.argv[2];

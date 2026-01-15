@@ -303,3 +303,70 @@ def add_collection_item(request):
         return Response({
             "error": str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+@api_view(['GET'])
+def search_restaurants(request):
+    """
+    GET /api/restaurants/search/
+    
+    Search through restaurants in the restaurant_analysis table.
+    
+    Query Parameters:
+    - q: Search query (searches establishment, cuisine, neighborhood, vibe)
+    - cuisine: Filter by cuisine (exact)
+    - neighborhood: Filter by neighborhood (exact)
+    - limit: Limit results (default: 20)
+    
+    Returns:
+    - List of matching restaurant objects
+    """
+    try:
+        q = request.GET.get('q', '').strip()
+        cuisine = request.GET.get('cuisine')
+        neighborhood = request.GET.get('neighborhood')
+        limit = int(request.GET.get('limit', 20))
+        
+        conn = get_cockroachdb_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        query = "SELECT * FROM restaurant_analysis WHERE 1=1"
+        params = []
+        
+        if q:
+            # Search across multiple fields
+            query += """ AND (
+                establishment ILIKE %s OR 
+                cuisine ILIKE %s OR 
+                neighborhood ILIKE %s OR 
+                vibe ILIKE %s OR
+                primary_draw ILIKE %s
+            )"""
+            search_pattern = f"%{q}%"
+            params.extend([search_pattern] * 5)
+            
+        if cuisine:
+            query += " AND cuisine ILIKE %s"
+            params.append(f"%{cuisine}%")
+            
+        if neighborhood:
+            query += " AND neighborhood ILIKE %s"
+            params.append(f"%{neighborhood}%")
+            
+        query += " LIMIT %s"
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        restaurants = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        return Response({
+            "query": q,
+            "count": len(restaurants),
+            "restaurants": restaurants
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            "error": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

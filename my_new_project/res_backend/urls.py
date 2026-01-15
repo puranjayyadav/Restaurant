@@ -16,7 +16,7 @@ from .views import (
 )
 from .collection_views import (
     get_collections, get_collection_by_id, get_collection_items,
-    create_collection, add_collection_item
+    create_collection, add_collection_item, search_restaurants
 )
 from .density_heatmap import get_density_heatmap
 try:
@@ -85,4 +85,5 @@ urlpatterns = [
     path('collection-items/', get_collection_items, name='api-get-collection-items'),
     path('collections/create/', create_collection, name='api-create-collection'),
     path('collection-items/add/', add_collection_item, name='api-add-collection-item'),
+    path('restaurants/search/', search_restaurants, name='api-search-restaurants'),
 ]

@@ -228,6 +228,43 @@ class ApiService {
     return null;
   }
 
+  /// Search for restaurants across various fields
+  Future<List<Map<String, dynamic>>> searchRestaurants({
+    required String query,
+    String? cuisine,
+    String? neighborhood,
+    int limit = 20,
+  }) async {
+    try {
+      String url = '$baseUrl/api/restaurants/search/?q=${Uri.encodeComponent(query)}&limit=$limit';
+      if (cuisine != null) {
+        url += '&cuisine=${Uri.encodeComponent(cuisine)}';
+      }
+      if (neighborhood != null) {
+        url += '&neighborhood=${Uri.encodeComponent(neighborhood)}';
+      }
+
+      final uri = Uri.parse(url);
+      print('DEBUG: Searching restaurants: $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        if (data is Map && data.containsKey('restaurants')) {
+          return List<Map<String, dynamic>>.from(data['restaurants']);
+        }
+      }
+      print('ERROR: Search failed: ${response.statusCode}');
+    } catch (e) {
+      print('ERROR: Exception in searchRestaurants: $e');
+    }
+    return [];
+  }
+
   /// Fetch cloneable adventures from Supabase (public table).
   Future<List<Map<String, dynamic>>> getCloneableAdventures(
       {int limit = 20}) async {

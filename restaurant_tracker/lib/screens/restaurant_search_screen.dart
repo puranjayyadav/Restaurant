@@ -158,13 +158,6 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _debounceTimer?.cancel();
-    super.dispose();
-  }
-
   void _onSearchChanged(String query) {
     _debounceTimer?.cancel();
     if (query.trim().isEmpty) {

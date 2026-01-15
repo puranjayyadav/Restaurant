@@ -1,5 +1,9 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import fs from 'fs';
+
+// Use stealth plugin to avoid detection which causes consent issues
+puppeteer.use(StealthPlugin());
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -12,7 +16,11 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 export async function scrapeReviewsBySearch(placeName, maxReviews = 5) {
     const browser = await puppeteer.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled'
+        ]
     });
 
     try {
@@ -25,23 +33,63 @@ export async function scrapeReviewsBySearch(placeName, maxReviews = 5) {
         await page.goto('https://www.google.com/maps', { waitUntil: 'networkidle2' });
         await delay(2000);
 
-        // Search
-        await page.waitForSelector('#searchboxinput');
-        await page.type('#searchboxinput', placeName);
-        await page.keyboard.press('Enter');
-        await delay(4000);
-
-        // Click first result
-        const firstResult = await page.$('a[href*="/maps/place/"]');
-        if (!firstResult) {
-            console.log('❌ No results found');
-            await browser.close();
-            return [];
+        // More robust consent handling - look for any button that looks like an "Accept" button
+        try {
+            const consentButtons = await page.$$('button');
+            for (const btn of consentButtons) {
+                const text = await btn.evaluate(el => el.textContent.trim());
+                // Handle English, and some common EU/International variants
+                if (['Accept all', 'I agree', 'Agree', 'Accept', 'Akceptuj wszystko', 'Alle akzeptieren', 'Accepter tout'].includes(text)) {
+                    console.log(`🍪 Clicking consent button: "${text}"`);
+                    await btn.click();
+                    await delay(3000);
+                    break;
+                }
+            }
+        } catch (e) {
+            console.log('   (No consent dialog detected via button scan)');
         }
 
-        console.log('📍 Opening place details...');
-        await firstResult.click();
-        await delay(4000);
+        // Search by direct URL instead of typing (much more robust)
+        const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(placeName)}`;
+        console.log(`⌨️ Searching via URL: ${searchUrl}`);
+
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        await delay(5000);
+
+        // Check if we already landed on a place page (direct redirect)
+        const currentUrl = page.url();
+        if (currentUrl.includes('/maps/place/')) {
+            console.log('📍 Landed directly on place page.');
+        } else {
+            // Click first result
+            const firstResult = await page.$('a[href*="/maps/place/"]');
+            if (!firstResult) {
+                console.log('❌ No results found on search page.');
+                await browser.close();
+                return [];
+            }
+            console.log('📍 Clicking on first search result...');
+            await firstResult.click();
+            await delay(4000);
+        }
+
+        // Scrape total review count from header (before clicking Reviews tab)
+        let totalReviewCount = null;
+        try {
+            totalReviewCount = await page.evaluate(() => {
+                const el = document.querySelector('span[role="img"][aria-label*="reviews"]');
+                if (el) {
+                    const label = el.getAttribute('aria-label');
+                    const match = label.match(/([\d,]+)/);
+                    return match ? parseInt(match[1].replace(/,/g, '')) : null;
+                }
+                return null;
+            });
+            console.log(`📊 Total reviews: ${totalReviewCount || 'Unknown'}`);
+        } catch (e) {
+            // Skip if not found
+        }
 
         // Click Reviews tab
         const buttons = await page.$$('button');
@@ -173,7 +221,14 @@ export async function scrapeReviewsBySearch(placeName, maxReviews = 5) {
 }
 
 // CLI usage
-if (import.meta.url === `file://${process.argv[1]}`) {
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const isMain = process.argv[1] && (
+    path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+);
+
+if (isMain) {
     const placeName = process.argv[2] || 'coffee shop Jersey City NJ';
     const maxReviews = parseInt(process.argv[3]) || 5;
 

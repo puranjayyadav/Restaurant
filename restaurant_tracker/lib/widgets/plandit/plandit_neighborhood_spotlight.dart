@@ -51,8 +51,8 @@ class _PlanditNeighborhoodSpotlightState extends State<PlanditNeighborhoodSpotli
             'https://images.unsplash.com/photo-1534430480872-3498386e7856?w=400&h=600&fit=crop',
             'https://images.unsplash.com/photo-1555992336-03a23c7b20ee?w=400&h=600&fit=crop',
             'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=400&h=600&fit=crop',
-            'https://images.unsplash.com/photo-1513635269975-59663e001ad7?w=400&h=600&fit=crop',
-            'https://images.unsplash.com/photo-1449034446853-66c86144b0ad?w=400&h=600&fit=crop',
+            'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400&h=600&fit=crop',
+            'https://images.unsplash.com/photo-1449824913935-59a10b8d2000?w=400&h=600&fit=crop',
           ];
           
           return Neighborhood(
@@ -186,6 +186,12 @@ class _NeighborhoodCard extends StatelessWidget {
               Image.network(
                 neighborhood.image,
                 fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  color: PlanditColors.secondary,
+                  child: const Center(
+                    child: Icon(Icons.image, color: PlanditColors.mutedForeground),
+                  ),
+                ),
               ),
               
               // Gradient Overlay

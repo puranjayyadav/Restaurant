@@ -104,6 +104,12 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
             Image.network(
               'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=800&q=80', // Replace with dynamic image if available
               fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => Container(
+                color: PlanditColors.secondary,
+                child: const Center(
+                  child: Icon(Icons.image, size: 48, color: PlanditColors.mutedForeground),
+                ),
+              ),
             ),
             Container(
               decoration: BoxDecoration(
@@ -209,6 +215,12 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
               child: Image.network(
                 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80', // Placeholder
                 fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  color: PlanditColors.secondary,
+                  child: const Center(
+                    child: Icon(Icons.restaurant, size: 48, color: PlanditColors.mutedForeground),
+                  ),
+                ),
               ),
             ),
           ),

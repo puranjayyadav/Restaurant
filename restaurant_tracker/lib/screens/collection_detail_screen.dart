@@ -306,12 +306,15 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                     if (item['primary_draw'] != null) ...[
                       const Icon(Icons.star_outline, size: 16, color: Colors.orange),
                       const SizedBox(width: 6),
-                      Text(
-                        item['primary_draw'].toString(),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: PlanditColors.foreground,
+                      Flexible(
+                        child: Text(
+                          item['primary_draw'].toString(),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: PlanditColors.foreground,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       const SizedBox(width: 16),
@@ -319,11 +322,14 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                     if (item['vibe'] != null) ...[
                       const Icon(Icons.auto_awesome_outlined, size: 16, color: PlanditColors.primary),
                       const SizedBox(width: 6),
-                      Text(
-                        item['vibe'].toString(),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: PlanditColors.mutedForeground,
+                      Flexible(
+                        child: Text(
+                          item['vibe'].toString(),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: PlanditColors.mutedForeground,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],

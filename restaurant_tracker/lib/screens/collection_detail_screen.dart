@@ -300,13 +300,13 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                 
                 const SizedBox(height: 16),
                 
-                // Primary Draw & Vibe
-                Row(
-                  children: [
-                    if (item['primary_draw'] != null) ...[
+                // Primary Draw
+                if (item['primary_draw'] != null) ...[
+                  Row(
+                    children: [
                       const Icon(Icons.star_outline, size: 16, color: Colors.orange),
                       const SizedBox(width: 6),
-                      Flexible(
+                      Expanded(
                         child: Text(
                           item['primary_draw'].toString(),
                           style: const TextStyle(
@@ -314,27 +314,31 @@ class _CollectionDetailScreenState extends State<CollectionDetailScreen> {
                             fontWeight: FontWeight.w600,
                             color: PlanditColors.foreground,
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      const SizedBox(width: 16),
                     ],
-                    if (item['vibe'] != null) ...[
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                
+                // Vibe
+                if (item['vibe'] != null) ...[
+                  Row(
+                    children: [
                       const Icon(Icons.auto_awesome_outlined, size: 16, color: PlanditColors.primary),
                       const SizedBox(width: 6),
-                      Flexible(
+                      Expanded(
                         child: Text(
                           item['vibe'].toString(),
                           style: const TextStyle(
                             fontSize: 13,
                             color: PlanditColors.mutedForeground,
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
-                  ],
-                ),
+                  ),
+                ],
                 
                 const SizedBox(height: 20),
                 

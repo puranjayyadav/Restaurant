@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import '../../theme/plandit_design_system.dart';
 
 class PlanditCategoryPills extends StatefulWidget {
-  const PlanditCategoryPills({super.key});
+  final Function(String query)? onCategorySelected;
+  const PlanditCategoryPills({super.key, this.onCategorySelected});
 
   @override
   State<PlanditCategoryPills> createState() => _PlanditCategoryPillsState();
@@ -13,11 +14,13 @@ class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
 
   final List<Map<String, String>> _categories = [
     {'id': 'all', 'label': 'All'},
-    {'id': 'asia', 'label': 'Asia'},
-    {'id': 'europe', 'label': 'Europe'},
-    {'id': 'africa', 'label': 'Africa'},
-    {'id': 'americas', 'label': 'Americas'},
-    {'id': 'oceania', 'label': 'Oceania'},
+    {'id': 'brunch', 'label': 'Brunch'},
+    {'id': 'date_night', 'label': 'Date Night'},
+    {'id': 'coffee', 'label': 'Coffee'},
+    {'id': 'rooftop', 'label': 'Rooftop'},
+    {'id': 'cocktail_bar', 'label': 'Cocktail Bar'},
+    {'id': 'hidden_gem', 'label': 'Hidden Gems'},
+    {'id': 'omakase', 'label': 'Omakase'},
   ];
 
   @override
@@ -32,7 +35,12 @@ class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
           final cat = _categories[index];
           final isActive = _activeId == cat['id'];
           return GestureDetector(
-            onTap: () => setState(() => _activeId = cat['id']!),
+            onTap: () {
+              setState(() => _activeId = cat['id']!);
+              if (cat['id'] != 'all' && widget.onCategorySelected != null) {
+                widget.onCategorySelected!(cat['label']!);
+              }
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 300),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

@@ -7,6 +7,7 @@ import '../widgets/plandit/plandit_category_pills.dart';
 import '../widgets/plandit/plandit_creator_leaderboard.dart';
 import '../widgets/plandit/plandit_editors_pick_carousel.dart';
 import '../widgets/plandit/plandit_itinerary_card.dart';
+import 'restaurant_search_screen.dart';
 
 class PlanditIndexScreen extends StatelessWidget {
   const PlanditIndexScreen({super.key});
@@ -23,7 +24,16 @@ class PlanditIndexScreen extends StatelessWidget {
             const PlanditHeader(),
             const SizedBox(height: 16),
             const PlanditSearchBar(),
-            const PlanditCategoryPills(),
+            PlanditCategoryPills(
+              onCategorySelected: (query) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => RestaurantSearchScreen(initialQuery: query),
+                  ),
+                );
+              },
+            ),
             PlanditCreatorLeaderboard(),
             PlanditEditorsPickCarousel(),
             

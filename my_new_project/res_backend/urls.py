@@ -14,6 +14,10 @@ from .views import (
     search_venues, save_itinerary, get_saved_itineraries, mark_venue_interaction, delete_venue_interaction,
     lemon8_rag_search
 )
+from .collection_views import (
+    get_collections, get_collection_by_id, get_collection_items,
+    create_collection, add_collection_item
+)
 from .density_heatmap import get_density_heatmap
 try:
     from . import lemon8_api
@@ -75,4 +79,10 @@ urlpatterns = [
     path('api/mark-venue-interaction/', mark_venue_interaction, name='api-mark-venue-interaction'),
     path('api/delete-venue-interaction/', delete_venue_interaction, name='api-delete-venue-interaction'),
     path('api/rag/lemon8/search/', lemon8_rag_search, name='api-lemon8-rag-search'),
+    # Collection endpoints (CockroachDB)
+    path('collections/', get_collections, name='api-get-collections'),
+    path('collections/<str:collection_id>/', get_collection_by_id, name='api-get-collection-by-id'),
+    path('collection-items/', get_collection_items, name='api-get-collection-items'),
+    path('collections/create/', create_collection, name='api-create-collection'),
+    path('collection-items/add/', add_collection_item, name='api-add-collection-item'),
 ]

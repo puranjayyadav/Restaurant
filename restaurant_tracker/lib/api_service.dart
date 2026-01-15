@@ -180,9 +180,13 @@ class ApiService {
   }
 
   /// Fetch collections from CockroachDB backend
-  Future<List<Map<String, dynamic>>> getCollections({int limit = 5, int offset = 0}) async {
+  Future<List<Map<String, dynamic>>> getCollections({int limit = 5, int offset = 0, int? minItems}) async {
     try {
-      final uri = Uri.parse('$baseUrl/api/collections/?limit=$limit&offset=$offset');
+      String url = '$baseUrl/api/collections/?limit=$limit&offset=$offset';
+      if (minItems != null) {
+        url += '&min_items=$minItems';
+      }
+      final uri = Uri.parse(url);
       print('DEBUG: Fetching collections from: $uri');
 
       final response = await http.get(

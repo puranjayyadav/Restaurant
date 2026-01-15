@@ -39,18 +39,28 @@ def get_collections(request):
         user_id = request.GET.get('user_id')
         limit = int(request.GET.get('limit', 100))
         offset = int(request.GET.get('offset', 0))
+        min_items = request.GET.get('min_items')
+        if min_items:
+            min_items = int(min_items)
         
         conn = get_cockroachdb_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         # Build query
-        query = "SELECT * FROM collections"
-        params = []
-        
-        # Note: user_id is missing from schema, removing filter
-        
-        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        if min_items:
+            query = """
+                SELECT c.*, count(*) as item_count
+                FROM collections c
+                JOIN collection_items ci ON c.id = ci.collection_id
+                GROUP BY c.id, c.name, c.description, c.neighborhood, c.created_at
+                HAVING count(*) >= %s
+                ORDER BY c.created_at DESC
+                LIMIT %s OFFSET %s
+            """
+            params = [min_items, limit, offset]
+        else:
+            query = "SELECT * FROM collections ORDER BY created_at DESC LIMIT %s OFFSET %s"
+            params = [limit, offset]
         
         cursor.execute(query, params)
         collections = cursor.fetchall()

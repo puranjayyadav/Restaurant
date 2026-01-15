@@ -42,7 +42,7 @@ class _PlanditNeighborhoodSpotlightState extends State<PlanditNeighborhoodSpotli
 
   Future<void> _fetchRealCollections() async {
     try {
-      final collections = await _apiService.getCollections(limit: 5);
+      final collections = await _apiService.getCollections(limit: 5, minItems: 3);
       setState(() {
         _neighborhoods = collections.map((c) {
           // Map backend fields to Neighborhood model
@@ -60,7 +60,7 @@ class _PlanditNeighborhoodSpotlightState extends State<PlanditNeighborhoodSpotli
             name: c['name'],
             vibe: c['neighborhood'] ?? 'Local Favorites',
             image: images[collections.indexOf(c) % images.length],
-            spots: 8, // Default spots for now
+            spots: c['item_count'] ?? 8, 
             neighborhood: c['neighborhood'],
           );
         }).toList();

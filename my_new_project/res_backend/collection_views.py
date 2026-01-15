@@ -44,12 +44,10 @@ def get_collections(request):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         # Build query
-        query = "SELECT * FROM collection"
+        query = "SELECT * FROM collections"
         params = []
         
-        if user_id:
-            query += " WHERE user_id = %s"
-            params.append(user_id)
+        # Note: user_id is missing from schema, removing filter
         
         query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
         params.extend([limit, offset])
@@ -88,7 +86,7 @@ def get_collection_by_id(request, collection_id):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         # Get collection
-        cursor.execute("SELECT * FROM collection WHERE id = %s", (collection_id,))
+        cursor.execute("SELECT * FROM collections WHERE id = %s", (collection_id,))
         collection = cursor.fetchone()
         
         if not collection:
@@ -101,8 +99,7 @@ def get_collection_by_id(request, collection_id):
         # Get collection items
         cursor.execute("""
             SELECT * FROM collection_items 
-            WHERE collection_id = %s 
-            ORDER BY created_at ASC
+            WHERE collection_id = %s
         """, (collection_id,))
         items = cursor.fetchall()
         
@@ -155,10 +152,10 @@ def get_collection_items(request):
             params.append(collection_id)
         
         if place_id:
-            query += " AND place_id = %s"
+            query += " AND restaurant_id = %s"
             params.append(place_id)
         
-        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        query += " LIMIT %s OFFSET %s"
         params.extend([limit, offset])
         
         cursor.execute(query, params)
@@ -205,19 +202,19 @@ def create_collection(request):
         description = data.get('description', '')
         is_public = data.get('is_public', False)
         
-        if not user_id or not name:
+        if not name:
             return Response({
-                "error": "user_id and name are required"
+                "error": "name is required"
             }, status=status.HTTP_400_BAD_REQUEST)
         
         conn = get_cockroachdb_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         cursor.execute("""
-            INSERT INTO collection (user_id, name, description, is_public, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO collections (name, description, neighborhood, created_at)
+            VALUES (%s, %s, %s, NOW())
             RETURNING *
-        """, (user_id, name, description, is_public))
+        """, (name, description, data.get('neighborhood', '')))
         
         collection = cursor.fetchone()
         conn.commit()
@@ -267,10 +264,10 @@ def add_collection_item(request):
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         cursor.execute("""
-            INSERT INTO collection_items (collection_id, place_id, notes, created_at)
-            VALUES (%s, %s, %s, NOW())
+            INSERT INTO collection_items (collection_id, restaurant_id)
+            VALUES (%s, %s)
             RETURNING *
-        """, (collection_id, place_id, notes))
+        """, (collection_id, place_id))
         
         item = cursor.fetchone()
         conn.commit()

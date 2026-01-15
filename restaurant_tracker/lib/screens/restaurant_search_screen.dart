@@ -38,7 +38,8 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
     {'label': 'West Village', 'emoji': '🏘️'},
     {'label': 'Natural Wine', 'emoji': '🍷'},
     {'label': 'Brunch', 'emoji': '🍳'},
-    {'label': 'Hidden Gems', 'emoji': '💎'},
+    {'label': 'Mexican', 'emoji': '🌮'},
+    {'label': 'Late Night', 'emoji': '🌙'},
   ];
 
   // Pagination state

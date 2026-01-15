@@ -10,17 +10,20 @@ class PlanditCategoryPills extends StatefulWidget {
 }
 
 class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
-  String _activeId = 'all';
+  String _activeId = 'brunch';
 
   final List<Map<String, String>> _categories = [
-    {'id': 'all', 'label': 'All', 'emoji': '✨'},
     {'id': 'brunch', 'label': 'Brunch', 'emoji': '🍳'},
     {'id': 'date_night', 'label': 'Date Night', 'emoji': '🍷'},
     {'id': 'coffee', 'label': 'Coffee', 'emoji': '☕️'},
     {'id': 'rooftop', 'label': 'Rooftop', 'emoji': '🌇'},
     {'id': 'cocktail_bar', 'label': 'Cocktail Bar', 'emoji': '🍸'},
-    {'id': 'hidden_gem', 'label': 'Hidden Gems', 'emoji': '💎'},
-    {'id': 'omakase', 'label': 'Omakase', 'emoji': '🍣'},
+    {'id': 'mexican', 'label': 'Mexican', 'emoji': '🌮'},
+    {'id': 'italian', 'label': 'Italian', 'emoji': '🍝'},
+    {'id': 'sushi', 'label': 'Sushi', 'emoji': '🍣'},
+    {'id': 'omakase', 'label': 'Omakase', 'emoji': '🍱'},
+    {'id': 'dessert', 'label': 'Dessert', 'emoji': '🍦'},
+    {'id': 'late_night', 'label': 'Late Night', 'emoji': '🌙'},
   ];
 
   @override
@@ -41,7 +44,7 @@ class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
               final label = cat['label'];
               if (id != null) {
                 setState(() => _activeId = id);
-                if (id != 'all' && label != null && widget.onCategorySelected != null) {
+                if (label != null && widget.onCategorySelected != null) {
                   widget.onCategorySelected!(label);
                 }
               }

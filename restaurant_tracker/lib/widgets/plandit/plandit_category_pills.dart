@@ -37,9 +37,13 @@ class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
           final isActive = _activeId == cat['id'];
           return GestureDetector(
             onTap: () {
-              setState(() => _activeId = cat['id']!);
-              if (cat['id'] != 'all' && widget.onCategorySelected != null) {
-                widget.onCategorySelected!(cat['label']!);
+              final id = cat['id'];
+              final label = cat['label'];
+              if (id != null) {
+                setState(() => _activeId = id);
+                if (id != 'all' && label != null && widget.onCategorySelected != null) {
+                  widget.onCategorySelected!(label);
+                }
               }
             },
             child: AnimatedContainer(
@@ -62,12 +66,12 @@ class _PlanditCategoryPillsState extends State<PlanditCategoryPills> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    cat['emoji']!,
+                    cat['emoji'] ?? '',
                     style: const TextStyle(fontSize: 14),
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    cat['label']!,
+                    cat['label'] ?? '',
                     style: TextStyle(
                       color: isActive
                           ? PlanditColors.primaryForeground

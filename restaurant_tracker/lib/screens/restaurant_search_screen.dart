@@ -450,13 +450,15 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   }
 
   Widget _buildSuggestionChip(Map<String, String> item) {
-    final label = item['label']!;
-    final emoji = item['emoji']!;
+    final label = item['label'] ?? '';
+    final emoji = item['emoji'] ?? '';
     
     return GestureDetector(
       onTap: () {
-        _searchController.text = label;
-        _performSearch(label);
+        if (label.isNotEmpty) {
+          _searchController.text = label;
+          _performSearch(label);
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

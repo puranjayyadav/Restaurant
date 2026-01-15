@@ -6,6 +6,7 @@ import '../api_service.dart';
 import '../widgets/plandit/plandit_search_bar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
 
 class RestaurantSearchScreen extends StatefulWidget {
   final String? initialQuery;
@@ -76,8 +77,11 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   Future<void> _toggleLoveRecommendation(Map<String, dynamic> restaurant) async {
     final firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please sign in to save recommendations')),
+      ShadToaster.of(context).show(
+        const ShadToast(
+          title: Text('Sign in required'),
+          description: Text('Please sign in to save recommendations'),
+        ),
       );
       return;
     }
@@ -111,6 +115,17 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
           'neighborhood': restaurant['neighborhood'],
         });
       }
+
+      if (mounted) {
+        ShadToaster.of(context).show(
+          ShadToast(
+            title: Text(isCurrentlyLoved ? 'Recommendation removed' : 'Recommendation saved'),
+            description: Text(isCurrentlyLoved 
+              ? 'Removed from your dashboard' 
+              : '${restaurant['establishment']} has been saved to your dashboard'),
+          ),
+        );
+      }
     } catch (e) {
       setState(() {
         if (isCurrentlyLoved) {
@@ -120,8 +135,11 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
         }
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update: $e'), backgroundColor: Colors.red),
+        ShadToaster.of(context).show(
+          ShadToast.destructive(
+            title: const Text('Error saving'),
+            description: Text(e.toString()),
+          ),
         );
       }
     }

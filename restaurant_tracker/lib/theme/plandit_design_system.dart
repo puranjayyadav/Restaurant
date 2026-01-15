@@ -16,6 +16,20 @@ class PlanditColors {
   static const accent = Color(0xFFD4AF37);
   static const mutedForeground = Color(0xFF6E6E73);
 
+  // Modern Classic Palette (for Editorial sections)
+  static const chicCream = Color(0xFFF9F7F2);
+  static const chicCharcoal = Color(0xFF1A1A1A);
+  static const chicGold = Color(0xFFD4AF37);
+  
+  static const shadowChic = [
+    BoxShadow(
+      color: Color(0x0F000000),
+      blurRadius: 40,
+      offset: Offset(0, 16),
+      spreadRadius: -8,
+    )
+  ];
+
   // Backward Compatibility / Legacy Aliases
   static const primary = Color(0xFF1A1A1A);
   static const primaryForeground = Color(0xFFFFFFFF);

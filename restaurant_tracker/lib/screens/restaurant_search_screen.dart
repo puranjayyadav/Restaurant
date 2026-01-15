@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 import '../widgets/beautiful_snackbar.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class RestaurantSearchScreen extends StatefulWidget {
   final String? initialQuery;
@@ -114,7 +115,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
 
       if (mounted) {
         if (isCurrentlyLoved) {
-          BeautifulSnackbar.showError(context, 'Removed from dashboard');
+          BeautifulSnackbar.showError(context, 'Removed from saved places');
         } else {
           BeautifulSnackbar.showSuccess(context, '✨ ${restaurant['establishment']} saved successfully! 💚');
         }
@@ -522,13 +523,34 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
                         child: _buildMiniBadge(restaurant['primary_draw']),
                       ),
                     const SizedBox(width: 12),
-                    Text(
-                      'EXPLORE DETAILS',
-                      style: GoogleFonts.mulish(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: PlanditColors.foreground,
-                        letterSpacing: 1,
+                    GestureDetector(
+                      onTap: () async {
+                        final name = restaurant['establishment'] ?? 'Unknown Restaurant';
+                        final query = Uri.encodeComponent('$name NYC');
+                        final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$query');
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                        } else {
+                          if (mounted) {
+                            BeautifulSnackbar.showError(context, 'Could not open maps');
+                          }
+                        }
+                      },
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.map_outlined, size: 14, color: PlanditColors.primary),
+                          const SizedBox(width: 6),
+                          Text(
+                            'VIEW ON MAPS',
+                            style: GoogleFonts.mulish(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: PlanditColors.primary,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],

@@ -30,13 +30,15 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
   final Set<String> _lovedRecommendationEstablishmentIds = {};
 
   // Suggested searches for empty state
-  final List<String> _suggestedSearches = [
-    'Handmade Pasta',
-    'Speakeasy',
-    'Rooftop Dining',
-    'Omakase',
-    'West Village',
-    'Natural Wine',
+  final List<Map<String, String>> _suggestedSearches = [
+    {'label': 'Handmade Pasta', 'emoji': '🍝'},
+    {'label': 'Speakeasy', 'emoji': '🕵️‍♂️'},
+    {'label': 'Rooftop Dining', 'emoji': '🌇'},
+    {'label': 'Omakase', 'emoji': '🍣'},
+    {'label': 'West Village', 'emoji': '🏘️'},
+    {'label': 'Natural Wine', 'emoji': '🍷'},
+    {'label': 'Brunch', 'emoji': '🍳'},
+    {'label': 'Hidden Gems', 'emoji': '💎'},
   ];
 
   // Pagination state
@@ -438,8 +440,8 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
           const Text('Search through our hand-picked restaurant guides.'),
           const SizedBox(height: 32),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 10,
+            runSpacing: 10,
             children: _suggestedSearches.map((s) => _buildSuggestionChip(s)).toList(),
           ),
         ],
@@ -447,20 +449,43 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
     );
   }
 
-  Widget _buildSuggestionChip(String label) {
+  Widget _buildSuggestionChip(Map<String, String> item) {
+    final label = item['label']!;
+    final emoji = item['emoji']!;
+    
     return GestureDetector(
       onTap: () {
         _searchController.text = label;
         _performSearch(label);
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: PlanditColors.secondary.withOpacity(0.1),
+          color: PlanditColors.secondary.withOpacity(0.8),
           borderRadius: BorderRadius.circular(100),
-          border: Border.all(color: PlanditColors.border.withOpacity(0.2)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
-        child: Text(label, style: const TextStyle(fontSize: 13)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 14)),
+            const SizedBox(width: 6),
+            Text(
+              label, 
+              style: GoogleFonts.mulish(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: PlanditColors.mutedForeground,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

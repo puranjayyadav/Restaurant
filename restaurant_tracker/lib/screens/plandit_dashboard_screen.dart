@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/plandit_design_system.dart';
 import '../widgets/plandit/plandit_dashboard_header.dart';
+import '../widgets/plandit/plandit_neighborhood_spotlight.dart';
 
 class PlanditDashboardScreen extends StatelessWidget {
   const PlanditDashboardScreen({super.key});
@@ -15,9 +16,9 @@ class PlanditDashboardScreen extends StatelessWidget {
         children: [
           const PlanditDashboardHeader(),
           
-          // Placeholder for other Dashboard components (AskAI, etc.)
+          // Real Dashboard components
           _buildPlaceholderSection(context, "Ask AI", "Your personal travel assistant"),
-          _buildPlaceholderSection(context, "Neighborhoods", "Curated guides by area"),
+          const PlanditNeighborhoodSpotlight(),
           _buildPlaceholderSection(context, "Weekend Edit", "The best of the city this weekend"),
           _buildPlaceholderSection(context, "Upcoming Trip", "Ready for your next adventure?"),
         ],

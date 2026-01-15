@@ -96,10 +96,16 @@ def get_collection_by_id(request, collection_id):
                 "error": "Collection not found"
             }, status=status.HTTP_404_NOT_FOUND)
         
-        # Get collection items
+        # Get collection items joined with restaurant info
         cursor.execute("""
-            SELECT * FROM collection_items 
-            WHERE collection_id = %s
+            SELECT 
+                ci.*, 
+                ra.establishment as name,
+                ra.cuisine,
+                ra.community_perception as summary
+            FROM collection_items ci
+            LEFT JOIN restaurant_analysis ra ON ci.restaurant_id::text = ra.id::text
+            WHERE ci.collection_id = %s
         """, (collection_id,))
         items = cursor.fetchall()
         

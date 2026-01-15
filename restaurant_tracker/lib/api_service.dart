@@ -179,6 +179,51 @@ class ApiService {
     return 'https://restaurant-production-3aa0.up.railway.app';
   }
 
+  /// Fetch collections from CockroachDB backend
+  Future<List<Map<String, dynamic>>> getCollections({int limit = 5, int offset = 0}) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/collections/?limit=$limit&offset=$offset');
+      print('DEBUG: Fetching collections from: $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        if (data is Map && data.containsKey('collections')) {
+          return List<Map<String, dynamic>>.from(data['collections']);
+        }
+      }
+      print('ERROR: Failed to fetch collections: ${response.statusCode}');
+    } catch (e) {
+      print('ERROR: Exception in getCollections: $e');
+    }
+    return [];
+  }
+
+  /// Fetch a single collection with its items
+  Future<Map<String, dynamic>?> getCollectionById(String collectionId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/collections/$collectionId/');
+      print('DEBUG: Fetching collection detail from: $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      }
+      print('ERROR: Failed to fetch collection detail: ${response.statusCode}');
+    } catch (e) {
+      print('ERROR: Exception in getCollectionById: $e');
+    }
+    return null;
+  }
+
   /// Fetch cloneable adventures from Supabase (public table).
   Future<List<Map<String, dynamic>>> getCloneableAdventures(
       {int limit = 20}) async {

@@ -114,7 +114,7 @@ class _RestaurantSearchScreenState extends State<RestaurantSearchScreen> {
 
       if (mounted) {
         if (isCurrentlyLoved) {
-          BeautifulSnackbar.showInfo(context, 'Removed from dashboard');
+          BeautifulSnackbar.showError(context, 'Removed from dashboard');
         } else {
           BeautifulSnackbar.showSuccess(context, '✨ ${restaurant['establishment']} saved successfully! 💚');
         }

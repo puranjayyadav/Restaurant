@@ -7,7 +7,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function scrapeVenueStatus(placeId) {
     const browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         slowMo: 50,
         args: [
             '--no-sandbox',

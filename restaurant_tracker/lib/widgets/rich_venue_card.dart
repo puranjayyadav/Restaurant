@@ -96,11 +96,13 @@ String _repairDoubleEncoding(String input) {
 class RichVenueCard extends StatefulWidget {
   final Map<String, dynamic> venue;
   final int stopNumber;
+  final String? badgeLabel;
 
   const RichVenueCard({
     super.key,
     required this.venue,
     required this.stopNumber,
+    this.badgeLabel,
   });
 
   @override
@@ -389,21 +391,21 @@ class _RichVenueCardState extends State<RichVenueCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Stop number badge
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFD4AF37).withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              'STOP ${widget.stopNumber}',
-              style: GoogleFonts.mulish(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.2,
-                color: const Color(0xFFD4AF37),
+            // Stop number badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD4AF37).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
               ),
+              child: Text(
+                widget.badgeLabel ?? 'STOP ${widget.stopNumber}',
+                style: GoogleFonts.mulish(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                  color: const Color(0xFFD4AF37),
+                ),
             ),
           ),
 
@@ -983,20 +985,20 @@ class _RichVenueCardState extends State<RichVenueCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFD4AF37).withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              'STOP ${widget.stopNumber}',
-              style: GoogleFonts.mulish(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.2,
-                color: const Color(0xFFD4AF37),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD4AF37).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
               ),
+              child: Text(
+                widget.badgeLabel ?? 'STOP ${widget.stopNumber}',
+                style: GoogleFonts.mulish(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                  color: const Color(0xFFD4AF37),
+                ),
             ),
           ),
           const SizedBox(height: 16),

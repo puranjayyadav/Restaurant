@@ -107,121 +107,11 @@ if not firebase_admin._apps:
 # Get a Firestore client
 db = firestore.client() if cred else None
 
-# ============================================================================
-# Dynamic Vibe Slugs Cache
-# ============================================================================
+# --- REFACTORED: Vibe Cache moved to views_utils.py ---
+from .views_utils import get_cached_vibe_slugs
 import time as _time_module
 
-_vibe_slugs_cache = {
-    "vibes": [],
-    "cuisine_groups": {},
-    "last_fetched": None
-}
-_VIBE_CACHE_TTL_SECONDS = 3600  # 1 hour cache
-
-
-def _get_fallback_vibes():
-    """Return hardcoded fallback vibes if database is unavailable."""
-    fallback_vibes = [
-        "aesthetic", "art_house", "australian_cafe", "bakery_cafe", "board_games",
-        "breakfast_classic", "brunch_buzzy", "burger_joint", "casual_lunch", "coffee",
-        "coffee_run", "dark_academia", "dinner_date", "dinner_group", "dive_bar",
-        "fine_dining", "french_bistro", "italian_red_sauce", "japanese_izakaya",
-        "korean_bbq", "late_night_eats", "listening_bar", "minimalist", "natural_wine",
-        "new_american", "pizza_nyc", "ramen_shop", "retro_vintage", "rooftop",
-        "solo_date", "soul_food", "speakeasy", "steakhouse", "sushi_restaurant",
-        "taco_stand", "tea_sanctuary", "thai_isan", "urban_jungle", "vegan_cafe",
-        "vietnamese", "work_friendly"
-    ]
-    cuisine_groups = {
-        'indian': ['indian_north', 'indian_south', 'indian_north_aesthetic', 'indian_south_aesthetic'],
-        'korean': ['korean_bbq', 'korean_pocha', 'korean_bbq_aesthetic', 'korean_pocha_aesthetic'],
-        'japanese': ['japanese_izakaya', 'japanese_sushi', 'japanese_izakaya_aesthetic', 'japanese_sushi_aesthetic', 'ramen_shop', 'sushi_restaurant'],
-        'italian': ['italian_red_sauce', 'italian_regional', 'italian_red_sauce_aesthetic', 'italian_regional_aesthetic', 'pasta_house', 'pizza_nyc'],
-        'chinese': ['chinese_cantonese', 'chinese_sichuan', 'chinese_xian', 'chinese_dumplings', 'dim_sum_house'],
-        'thai': ['thai_isan', 'thai_restaurant', 'thai_isan_aesthetic'],
-        'vietnamese': ['vietnamese', 'vietnamese_aesthetic', 'pho_restaurant'],
-        'french': ['french_bistro', 'french_bistro_aesthetic'],
-        'greek': ['greek_taverna', 'greek_taverna_aesthetic'],
-        'mexican': ['mexican_street', 'mexican_street_aesthetic', 'taco_stand', 'taco_truck', 'burrito_place'],
-    }
-    return fallback_vibes, cuisine_groups
-
-
-def get_cached_vibe_slugs():
-    """
-    Fetch and cache all distinct vibe_slugs from venue_vibes table.
-    Returns tuple of (all_vibe_slugs, cuisine_groups).
-    Cache TTL is 1 hour.
-    """
-    global _vibe_slugs_cache
-    
-    now = _time_module.time()
-    if (_vibe_slugs_cache["vibes"] and 
-        _vibe_slugs_cache["last_fetched"] and 
-        now - _vibe_slugs_cache["last_fetched"] < _VIBE_CACHE_TTL_SECONDS):
-        print(f"DEBUG: Using cached vibe slugs ({len(_vibe_slugs_cache['vibes'])} vibes)")
-        return _vibe_slugs_cache["vibes"], _vibe_slugs_cache["cuisine_groups"]
-    
-    try:
-        from supabase_config import get_supabase_client
-        supabase = get_supabase_client()
-        
-        if not supabase:
-            print("DEBUG: Supabase unavailable, using fallback vibes")
-            return _get_fallback_vibes()
-        
-        # Fetch all distinct vibe slugs
-        result = supabase.table("venue_vibes").select("vibe_slug").execute()
-        
-        if not result.data:
-            print("DEBUG: No vibes returned from database, using fallback")
-            return _get_fallback_vibes()
-        
-        # Extract unique slugs
-        all_vibes = sorted(list(set([v.get('vibe_slug') for v in result.data if v.get('vibe_slug')])))
-        print(f"DEBUG: Fetched {len(all_vibes)} unique vibe slugs from database")
-        
-        # Build cuisine groups dynamically
-        cuisine_keywords = {
-            'indian': ['indian'],
-            'korean': ['korean'],
-            'japanese': ['japanese', 'sushi', 'ramen'],
-            'italian': ['italian', 'pasta', 'pizza'],
-            'chinese': ['chinese', 'dim_sum', 'dumpling'],
-            'thai': ['thai'],
-            'vietnamese': ['vietnamese', 'pho'],
-            'french': ['french'],
-            'greek': ['greek'],
-            'mexican': ['mexican', 'taco', 'burrito'],
-            'caribbean': ['caribbean', 'jamaican'],
-            'colombian': ['colombian'],
-            'peruvian': ['peruvian'],
-            'russian': ['russian'],
-            'eastern_european': ['eastern_european'],
-            'middle_eastern': ['middle_eastern'],
-            'soul_food': ['soul_food'],
-            'halal': ['halal'],
-            'jewish': ['jewish', 'deli'],
-        }
-        
-        cuisine_groups = {}
-        for cuisine_type, keywords in cuisine_keywords.items():
-            cuisine_groups[cuisine_type] = [
-                slug for slug in all_vibes 
-                if any(kw in slug.lower() for kw in keywords)
-            ]
-        
-        # Update cache
-        _vibe_slugs_cache["vibes"] = all_vibes
-        _vibe_slugs_cache["cuisine_groups"] = cuisine_groups
-        _vibe_slugs_cache["last_fetched"] = now
-        
-        return all_vibes, cuisine_groups
-        
-    except Exception as e:
-        print(f"ERROR: Failed to fetch vibe slugs: {e}")
-        return _get_fallback_vibes()
+# Function get_cached_vibe_slugs and _get_fallback_vibes removed as they now live in views_utils.py
 
 
 @api_view(['POST'])
@@ -766,7 +656,7 @@ def generate_day_itinerary(request):
                         }
                     }
         
-        # Try OR-Tools path first (if enabled)
+        # Get the initial result (Response object or dict)
         if USE_OR_TOOLS_OPTIMIZER:
             try:
                 places_for_solver = merged_places
@@ -778,6 +668,7 @@ def generate_day_itinerary(request):
                         user_location=(latitude, longitude),
                         enable_gap_filling=ENABLE_GAP_FILLING,
                         top_k=MAX_CLUSTERS_TO_USE,
+                        radius_m=max_distance_km * 1000
                     )
                     if clusters:
                         if CLUSTER_STRATEGY == 'single':
@@ -793,8 +684,7 @@ def generate_day_itinerary(request):
                                 'gap_filled': bool(best_cluster.get('gap_filled')),
                             }
                         else:
-                            # Optional multi-neighborhood mode – flatten top_k clusters,
-                            # but keep track of cluster ids for potential penalties.
+                            # Optional multi-neighborhood mode – flatten top_k clusters
                             selected = clusters[: max(1, MAX_CLUSTERS_TO_USE)]
                             flat_places: List[Dict] = []
                             for cl in selected:
@@ -809,7 +699,7 @@ def generate_day_itinerary(request):
                                     'cluster_labels': [c.get('label') for c in selected],
                                 }
 
-                result = _generate_with_or_tools(
+                itinerary_dict = _generate_with_or_tools(
                     places_for_solver,
                     latitude,
                     longitude,
@@ -820,25 +710,62 @@ def generate_day_itinerary(request):
                     use_seen_history=True,
                     cluster_strategy=CLUSTER_STRATEGY,
                 )
-                if result:
+                
+                if itinerary_dict:
                     meta = {'algorithm': 'or_tools', 'clustering': 'dbscan' if ENABLE_CLUSTERING else 'none'}
                     if cluster_metadata:
                         meta['cluster_metadata'] = cluster_metadata
-                    result['metadata'] = meta
-                    return Response(result, status=status.HTTP_200_OK)
+                    itinerary_dict['metadata'] = meta
                 else:
                     print("DEBUG: OR-Tools returned no solution, falling back to rule-based")
+                    raw_response = _generate_rule_based_itinerary(
+                        merged_places, latitude, longitude, selected_categories,
+                        max_distance_km, vegetarian_filter
+                    )
+                    itinerary_dict = raw_response.data
             except Exception as e:
                 import traceback
                 print(f"DEBUG: OR-Tools failed: {str(e)}")
                 print(f"DEBUG: {traceback.format_exc()}")
                 print("DEBUG: Falling back to rule-based algorithm")
-        
-        # Fallback to rule-based algorithm (existing logic)
-        return _generate_rule_based_itinerary(
-            merged_places, latitude, longitude, selected_categories,
-            max_distance_km, vegetarian_filter
-        )
+                raw_response = _generate_rule_based_itinerary(
+                    merged_places, latitude, longitude, selected_categories,
+                    max_distance_km, vegetarian_filter
+                )
+                itinerary_dict = raw_response.data
+        else:
+            raw_response = _generate_rule_based_itinerary(
+                merged_places, latitude, longitude, selected_categories,
+                max_distance_km, vegetarian_filter
+            )
+            itinerary_dict = raw_response.data
+
+        # --- Inject Spotlight Recommendation ---
+        try:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            planner_v2 = DayPlannerServiceV2()
+            
+            # Get vibes for scoring
+            vibe_slugs = selected_categories # Categories serve as vibes here
+            
+            # Get excluded place IDs (already used in itinerary)
+            excluded_place_ids = [str(item.get('place_id', '')) for item in itinerary_dict.get('itinerary', [])]
+            
+            spotlight = planner_v2._find_spotlight_recommendation(
+                lat=latitude,
+                lng=longitude,
+                radius_m=int(max_distance_km * 1000),
+                vibe_slugs=vibe_slugs,
+                excluded_place_ids=excluded_place_ids
+            )
+            
+            if spotlight:
+                itinerary_dict['spotlight_recommendation'] = spotlight
+                print(f"DEBUG: Injected spotlight recommendation: {spotlight.get('name')}")
+        except Exception as se:
+            print(f"DEBUG: Error injecting spotlight: {se}")
+
+        return Response(itinerary_dict, status=status.HTTP_200_OK)
         
     except Exception as e:
         import traceback
@@ -2201,8 +2128,8 @@ def generate_and_enrich_itinerary(request):
                 (enrichment_stats['enriched_count'] / enrichment_stats['total_restaurants']) * 100, 
                 1
             )
-        
-        return Response({
+        # --- Inject Spotlight Recommendation ---
+        itinerary_dict = {
             'itinerary': enriched_itinerary,
             'total_items': len(enriched_itinerary),
             'enrichment_stats': enrichment_stats,
@@ -2213,7 +2140,35 @@ def generate_and_enrich_itinerary(request):
                 'tags': tags,
                 'radius_km': radius_km
             }
-        }, status=status.HTTP_200_OK)
+        }
+        
+        try:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            planner_v2 = DayPlannerServiceV2()
+            
+            # Map cuisine/tags to vibe slugs
+            vibe_slugs = []
+            if cuisine: vibe_slugs.append(cuisine.lower())
+            vibe_slugs.extend([t.lower() for t in tags])
+            
+            # Get excluded place IDs (already used in itinerary)
+            excluded_place_ids = [str(item.get('place_id', '')) for item in enriched_itinerary]
+            
+            spotlight = planner_v2._find_spotlight_recommendation(
+                lat=latitude,
+                lng=longitude,
+                radius_m=int(radius_km * 1000),
+                vibe_slugs=vibe_slugs,
+                excluded_place_ids=excluded_place_ids
+            )
+            
+            if spotlight:
+                itinerary_dict['spotlight_recommendation'] = spotlight
+                print(f"DEBUG: Injected spotlight recommendation: {spotlight.get('name')}")
+        except Exception as se:
+            print(f"DEBUG: Error injecting spotlight in enriched_itinerary: {se}")
+        
+        return Response(itinerary_dict, status=status.HTTP_200_OK)
         
     except Exception as e:
         import traceback
@@ -2412,8 +2367,8 @@ def create_itinerary_skeleton(request):
         title = f"{destination}: {clean_vibe} Escape"
         subtitle = f"A solver-optimized journey through {destination} using real Supabase data."
 
-        # Return the comprehensive itinerary data (compatible with ItineraryDetailScreen)
-        return Response({
+        # Prepare base response
+        itinerary_dict = {
             'itinerary_id': itinerary_id,
             'id': itinerary_id,
             'status': 'success',
@@ -2430,7 +2385,36 @@ def create_itinerary_skeleton(request):
                     'total_duration_hours': 10
                 }
             }
-        }, status=status.HTTP_201_CREATED)
+        }
+
+        # --- Inject Spotlight Recommendation ---
+        try:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            planner_v2 = DayPlannerServiceV2()
+            
+            # Use original vibes for scoring
+            vibe_slugs = vibes
+            
+            # Get excluded place IDs (already used in itinerary)
+            # Match by name since skeleton stops might not have place_ids yet in all cases
+            # But let's check itinerary_stops which are full objects
+            excluded_place_ids = [str(stop.get('place_id', '')) for stop in itinerary_stops if stop.get('place_id')]
+            
+            spotlight = planner_v2._find_spotlight_recommendation(
+                lat=lat,
+                lng=lng,
+                radius_m=3000, # Standard skeleton radius
+                vibe_slugs=vibe_slugs,
+                excluded_place_ids=excluded_place_ids
+            )
+            
+            if spotlight:
+                itinerary_dict['spotlight_recommendation'] = spotlight
+                print(f"DEBUG: Injected spotlight recommendation in skeleton: {spotlight.get('name')}")
+        except Exception as se:
+            print(f"DEBUG: Error injecting spotlight in skeleton: {se}")
+
+        return Response(itinerary_dict, status=status.HTTP_201_CREATED)
 
     except Exception as e:
         import traceback
@@ -3902,8 +3886,9 @@ def generate_itinerary(request):
         "start_long": -74.0022,  // or "longitude"
         "selected_vibe": "romantic",  // optional, will be randomized if null
         "social_context": "couple",  // optional, defaults to "couple" if null
-        "radius_meters": 3000,
-        "local_time_start": "10:00"
+        "radius_meters": 1500,  # Tighter default for localized results
+        "local_time_start": "10:00",
+        "query": "romantic indian dinner in soho"  // NEW: natural language query
     }
     
     Alternative format (from geocoding endpoint):
@@ -3925,61 +3910,149 @@ def generate_itinerary(request):
         "narrative": "..."
     }
     """
+    import os
+    
+    # Feature flag: Use V2 Intent-Driven architecture
+    USE_V2_PLANNER = os.getenv('USE_V2_PLANNER', 'true').lower() == 'true'
+    
     try:
-        from .day_planner_service import DayPlannerService
-        
         data = request.data
         
-        # Accept both formats: start_lat/start_long or latitude/longitude (from geocoding)
+        # Extract parameters
         start_lat = data.get('start_lat') or data.get('latitude')
         start_long = data.get('start_long') or data.get('longitude')
         selected_vibe = data.get('selected_vibe')
         social_context = data.get('social_context')
-        radius_meters = int(data.get('radius_meters', 3000))
+        cuisine_preferences = data.get('cuisine_preferences')
+        cuisine_preference_min = data.get('cuisine_preference_min')
+        cuisine_preference_max = data.get('cuisine_preference_max')
+        user_query = data.get('query')
+        radius_meters = int(data.get('radius_meters', 1000))
         local_time_start = data.get('local_time_start', '10:00')
+        user_id = data.get('user_id')
+        exclude_place_ids = data.get('exclude_place_ids') or []
+        if isinstance(exclude_place_ids, str):
+            exclude_place_ids = [
+                pid.strip() for pid in exclude_place_ids.split(",") if pid.strip()
+            ]
+        if not isinstance(exclude_place_ids, list):
+            exclude_place_ids = []
         
-        # #region agent log
-        import json
-        import os
-        log_path = r'c:\Users\PURANJAY\OneDrive\Documents\Res_2\.cursor\debug.log'
-        try:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'A',
-                    'location': 'views.py:3817',
-                    'message': 'Received generate_itinerary request',
-                    'data': {
-                        'start_lat': start_lat,
-                        'start_long': start_long,
-                        'selected_vibe': selected_vibe,
-                        'social_context': social_context,
-                        'will_use_random_nyc': start_lat is None or start_long is None
-                    },
-                    'timestamp': int(__import__('time').time() * 1000)
-                }) + '\n')
-        except: pass
-        # #endregion
+        # Cap large radius for neighborhood searches
+        if user_query and radius_meters > 1200:
+            print(f"DEBUG: Capping large radius {radius_meters}m to 1200m for neighborhood search")
+            radius_meters = 1200
         
-        # Apply defaults: randomize selected_vibe if null, default social_context to "couple"
+        print(f"DEBUG: USE_V2_PLANNER={USE_V2_PLANNER}, query={user_query}")
+        
+        # =====================================================
+        # V2 Intent-Driven Architecture (when natural language query provided)
+        # =====================================================
+        if USE_V2_PLANNER and user_query:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            
+            print(f"DEBUG: Using V2 Intent-Driven Pipeline for query: {user_query}")
+            
+            planner_v2 = DayPlannerServiceV2()
+            
+            # Convert coordinates to float if provided
+            lat = float(start_lat) if start_lat is not None else None
+            lng = float(start_long) if start_long is not None else None
+            
+            result = planner_v2.generate_from_query(
+                query=user_query,
+                start_lat=lat,
+                start_long=lng,
+                radius_meters=radius_meters,
+                user_id=user_id,
+                exclude_place_ids=exclude_place_ids
+            )
+            
+            if "error" in result:
+                # Fallback to V1 if V2 fails
+                print(f"DEBUG: V2 returned error, falling back to V1: {result.get('error')}")
+            else:
+                # Add service version to result for debugging
+                result['_service_version'] = 'v2_intent_driven'
+                return Response(result, status=status.HTTP_200_OK)
+        
+        # =====================================================
+        # V2 with Explicit Parameters (backwards compatible path)
+        # =====================================================
+        if USE_V2_PLANNER:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            
+            print(f"DEBUG: Using V2 with explicit params: vibe={selected_vibe}, cuisine={cuisine_preferences}")
+            
+            planner_v2 = DayPlannerServiceV2()
+            
+            # Apply defaults
+            if social_context is None:
+                social_context = 'couple'
+            
+            # Convert coordinates
+            lat = float(start_lat) if start_lat is not None else None
+            lng = float(start_long) if start_long is not None else None
+            
+            result = planner_v2.generate_itinerary(
+                start_lat=lat,
+                start_long=lng,
+                selected_vibe=selected_vibe,
+                social_context=social_context,
+                radius_meters=radius_meters,
+                local_time_start=local_time_start,
+                cuisine_preferences=cuisine_preferences,
+                cuisine_preference_min=cuisine_preference_min,
+                cuisine_preference_max=cuisine_preference_max,
+                user_id=user_id,
+                exclude_place_ids=exclude_place_ids
+            )
+            
+            if "error" not in result:
+                result['_service_version'] = 'v2_explicit_params'
+                return Response(result, status=status.HTTP_200_OK)
+            else:
+                print(f"DEBUG: V2 explicit params failed, falling back to V1: {result.get('error')}")
+        
+        # =====================================================
+        # V1 Original Service (Fallback)
+        # =====================================================
+        from .day_planner_service import DayPlannerService
+        
+        print("DEBUG: Using V1 DayPlannerService")
+        
+        # Parse query if needed (original V1 logic)
+        if user_query and (start_lat is None or selected_vibe is None or not cuisine_preferences):
+            from .query_intelligence import parse_and_geocode_query
+            print(f"DEBUG: Parsing query for missing params: {user_query}")
+            parsed_data = parse_and_geocode_query(user_query)
+            
+            if parsed_data:
+                if start_lat is None:
+                    start_lat = parsed_data.get('latitude')
+                    start_long = parsed_data.get('longitude')
+                if selected_vibe is None:
+                    selected_vibe = parsed_data.get('selected_vibe')
+                if not cuisine_preferences:
+                    cuisine_preferences = parsed_data.get('cuisine_preferences')
+                if social_context is None:
+                    social_context = parsed_data.get('social_context')
+                print(f"DEBUG: Merged query data: lat={start_lat}, vibe={selected_vibe}, cuisines={cuisine_preferences}")
+        
+        # Apply defaults
         if selected_vibe is None:
             import random
             cached_vibes, _ = get_cached_vibe_slugs()
             if cached_vibes:
                 selected_vibe = random.choice(cached_vibes)
-                print(f"DEBUG: Randomized selected_vibe to: {selected_vibe}")
             else:
-                # Fallback to common vibes if cache fails
                 common_vibes = ["dinner_date", "coffee", "brunch_buzzy", "casual_lunch", "solo_date", "work_friendly"]
                 selected_vibe = random.choice(common_vibes)
         
         if social_context is None:
             social_context = 'couple'
-            print(f"DEBUG: Defaulted social_context to: couple")
         
-        # If coordinates are not provided, the service will use a random NYC location
-        # Convert to float only if provided, otherwise pass None
+        # Convert to float only if provided
         start_lat = float(start_lat) if start_lat is not None else None
         start_long = float(start_long) if start_long is not None else None
         
@@ -3991,20 +4064,7 @@ def generate_itinerary(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Extract cuisine preferences from request
-        cuisine_preferences = data.get('cuisine_preferences')
-        cuisine_preference_min = data.get('cuisine_preference_min')
-        cuisine_preference_max = data.get('cuisine_preference_max')
-        
-        # Extract user_id for history tracking (optional)
-        user_id = data.get('user_id')
-        
-        print(f"DEBUG: Received cuisine_preferences: {cuisine_preferences}")
-        print(f"DEBUG: Received cuisine_preference_min: {cuisine_preference_min}")
-        print(f"DEBUG: Received cuisine_preference_max: {cuisine_preference_max}")
-        print(f"DEBUG: Received user_id: {user_id}")
-        
-        # Generate itinerary
+        # Generate itinerary with V1
         planner = DayPlannerService()
         result = planner.generate_itinerary(
             start_lat=start_lat,
@@ -4016,12 +4076,14 @@ def generate_itinerary(request):
             cuisine_preferences=cuisine_preferences,
             cuisine_preference_min=cuisine_preference_min,
             cuisine_preference_max=cuisine_preference_max,
-            user_id=user_id
+            user_id=user_id,
+            exclude_place_ids=exclude_place_ids
         )
         
         if "error" in result:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
         
+        result['_service_version'] = 'v1_original'
         return Response(result, status=status.HTTP_200_OK)
         
     except Exception as e:
@@ -4833,4 +4895,74 @@ def lemon8_rag_search(request):
         return Response(
             {"error": f"RAG search failed: {e}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+@api_view(['POST'])
+@permission_classes([])
+def save_user_itinerary(request):
+    """
+    Saves a generated itinerary for future sharing or user persistence.
+    """
+    try:
+        from .day_planner_service import DayPlannerService
+        data = request.data
+        user_id = data.get('user_id')
+        places = data.get('places')
+        filters = data.get('filters', {})
+        narrative = data.get('narrative', '')
+        total_walk_time_mins = data.get('total_walk_time_mins')
+
+        if not user_id or not places:
+            return Response(
+                {"error": "user_id and places array are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        planner = DayPlannerService()
+        result = planner.save_itinerary(
+            user_id=user_id,
+            places=places,
+            filters=filters,
+            narrative=narrative,
+            total_walk_time_mins=total_walk_time_mins
+        )
+
+        if "error" in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(result, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to save itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([])
+def get_shared_itinerary(request, itinerary_id):
+    """
+    Retrieves a shared itinerary and hydrates it with live venue data.
+    """
+    try:
+        from .day_planner_service import DayPlannerService
+        if not itinerary_id:
+            return Response(
+                {"error": "itinerary_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        planner = DayPlannerService()
+        result = planner.get_saved_itinerary(itinerary_id)
+
+        if "error" in result:
+            status_code = status.HTTP_404_NOT_FOUND if "not found" in result["error"].lower() else status.HTTP_400_BAD_REQUEST
+            return Response(result, status=status_code)
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to retrieve shared itinerary: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

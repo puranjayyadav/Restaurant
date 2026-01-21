@@ -36,6 +36,160 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
     _fetchRichData();
   }
 
+  double? _readDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+
+  String? _readString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
+  }
+
+  List<String>? _readStringList(dynamic value) {
+    if (value is List) {
+      return value.map((item) => item.toString()).toList();
+    }
+    final asString = _readString(value);
+    if (asString != null) return [asString];
+    return null;
+  }
+
+  Map<String, dynamic>? _getParamMap() {
+    final itineraryData = _currentItinerary['itinerary_data'];
+    if (itineraryData is Map && itineraryData['filters'] is Map) {
+      return Map<String, dynamic>.from(
+          (itineraryData['filters'] as Map).cast<String, dynamic>());
+    }
+    if (_currentItinerary['filters'] is Map) {
+      return Map<String, dynamic>.from(
+          (_currentItinerary['filters'] as Map).cast<String, dynamic>());
+    }
+    if (itineraryData is Map && itineraryData['params'] is Map) {
+      return Map<String, dynamic>.from(
+          (itineraryData['params'] as Map).cast<String, dynamic>());
+    }
+    if (_currentItinerary['params'] is Map) {
+      return Map<String, dynamic>.from(
+          (_currentItinerary['params'] as Map).cast<String, dynamic>());
+    }
+    return null;
+  }
+
+  Future<void> _regenerateItinerary() async {
+    if (_isRegenerating) return;
+    setState(() => _isRegenerating = true);
+
+    try {
+      final excludePlaceIds = _currentPlaceIds();
+      final params = _getParamMap();
+      final query = _readString(params?['query']) ??
+          _readString(_currentItinerary['query']);
+      double? startLat = _readDouble(params?['start_lat']) ??
+          _readDouble(params?['latitude']) ??
+          _readDouble(_currentItinerary['start_lat']) ??
+          _readDouble(_currentItinerary['latitude']);
+      double? startLong = _readDouble(params?['start_long']) ??
+          _readDouble(params?['longitude']) ??
+          _readDouble(_currentItinerary['start_long']) ??
+          _readDouble(_currentItinerary['longitude']);
+      if (startLat == null || startLong == null) {
+        final firstStop = _stops.isNotEmpty ? _stops.first : null;
+        startLat = startLat ??
+            _readDouble(firstStop?['latitude']) ??
+            _readDouble(firstStop?['lat']) ??
+            _readDouble(firstStop?['postgres_data']?['latitude']);
+        startLong = startLong ??
+            _readDouble(firstStop?['longitude']) ??
+            _readDouble(firstStop?['lng']) ??
+            _readDouble(firstStop?['postgres_data']?['longitude']);
+      }
+
+      final selectedVibe = _readString(params?['selected_vibe']) ??
+          _readString(params?['vibe']) ??
+          _readString(_currentItinerary['selected_vibe']) ??
+          _readString(_currentItinerary['vibe']) ??
+          'dinner_date';
+      final socialContext = _readString(params?['social_context']) ??
+          _readString(params?['socialContext']) ??
+          _readString(_currentItinerary['social_context']) ??
+          'couple';
+      final cuisinePreferences = _readStringList(params?['cuisine_preferences']) ??
+          _readStringList(params?['cuisines']) ??
+          _readStringList(_currentItinerary['cuisine_preferences']);
+      final localTimeStart = _readString(params?['local_time_start']) ??
+          _readString(params?['timeOfDay']) ??
+          _readString(_currentItinerary['local_time_start']) ??
+          '19:00';
+      final radiusMeters = _readDouble(params?['radius_meters']) ??
+          _readDouble(_currentItinerary['radius_meters']);
+      final radiusKm = _readDouble(params?['radius_km']) ??
+          _readDouble(_currentItinerary['radius_km']);
+      final resolvedRadiusMeters = radiusMeters ??
+          (radiusKm != null ? radiusKm * 1000.0 : 3000.0);
+
+      final newItinerary = await _apiService.generateItinerary(
+        startLat: startLat,
+        startLong: startLong,
+        selectedVibe: selectedVibe,
+        socialContext: socialContext,
+        cuisinePreferences: cuisinePreferences,
+        excludePlaceIds: excludePlaceIds,
+        radiusMeters: resolvedRadiusMeters.round(),
+        localTimeStart: localTimeStart,
+        query: query,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _currentItinerary = {
+          ..._currentItinerary,
+          'itinerary_data': newItinerary,
+        };
+        _richItineraryData = null;
+        _isRegenerating = false;
+      });
+
+      await _fetchRichData();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: const [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 12),
+                Text('Itinerary regenerated!'),
+              ],
+            ),
+            backgroundColor: const Color(0xFF4CAF50),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isRegenerating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: const [
+              Icon(Icons.error_outline, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(child: Text('Failed to regenerate itinerary.')),
+            ],
+          ),
+          backgroundColor: Colors.red[700],
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+  }
+
   /// Regenerate itinerary from a new starting point
   Future<void> _regenerateFromLocation(double lat, double lng) async {
     setState(() => _isRegenerating = true);
@@ -57,6 +211,8 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
       print(
           'DEBUG: Vibe: $selectedVibe, Social: $socialContext, Cuisine: $cuisinePreferences');
 
+      final excludePlaceIds = _currentPlaceIds();
+
       // Call API to regenerate
       final newItinerary = await _apiService.generateItinerary(
         startLat: lat,
@@ -66,6 +222,7 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
         cuisinePreferences: cuisinePreferences is List
             ? cuisinePreferences.map((e) => e.toString()).toList()
             : null,
+        excludePlaceIds: excludePlaceIds,
         radiusMeters: 3000,
         localTimeStart: '19:00',
       );
@@ -142,6 +299,13 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
       }
     }
 
+    final spotlightPlaceId = _spotlight?['place_id']?.toString();
+    if (spotlightPlaceId != null &&
+        spotlightPlaceId.isNotEmpty &&
+        !placeIds.contains(spotlightPlaceId)) {
+      placeIds.add(spotlightPlaceId);
+    }
+
     print('DEBUG: Collected ${placeIds.length} place IDs: $placeIds');
 
     if (placeIds.isNotEmpty) {
@@ -186,6 +350,22 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
     return const <Map<String, dynamic>>[];
   }
 
+  List<String> _currentPlaceIds() {
+    final ids = <String>[];
+    for (final stop in _stops) {
+      final placeId = stop['place_id']?.toString() ??
+          stop['postgres_data']?['place_id']?.toString();
+      if (placeId != null && placeId.isNotEmpty) {
+        ids.add(placeId);
+      }
+    }
+    final spotlightId = _spotlight?['place_id']?.toString();
+    if (spotlightId != null && spotlightId.isNotEmpty) {
+      ids.add(spotlightId);
+    }
+    return ids.toSet().toList();
+  }
+
   Map<String, dynamic> get _routeStats {
     final data = _currentItinerary['itinerary_data'];
     if (data is Map) {
@@ -195,6 +375,21 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
       }
     }
     return const {};
+  }
+
+  Map<String, dynamic>? get _spotlight {
+    final data = _currentItinerary['itinerary_data'];
+    if (data is Map && data.containsKey('spotlight_recommendation')) {
+      final spotlight = data['spotlight_recommendation'];
+      if (spotlight is Map) {
+        return Map<String, dynamic>.from(spotlight.cast<String, dynamic>());
+      }
+    }
+    final spotlight = _currentItinerary['spotlight_recommendation'];
+    if (spotlight is Map) {
+      return Map<String, dynamic>.from(spotlight.cast<String, dynamic>());
+    }
+    return null;
   }
 
   String _title() =>
@@ -478,6 +673,40 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
                 backgroundColor: Colors.white,
                 elevation: 0,
                 surfaceTintColor: Colors.white,
+                actions: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.12),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          )
+                        ],
+                      ),
+                      child: IconButton(
+                        tooltip: 'Regenerate',
+                        icon: _isRegenerating
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.black87),
+                                ),
+                              )
+                            : const Icon(Icons.refresh, color: Colors.black87),
+                        onPressed:
+                            _isRegenerating ? null : () => _regenerateItinerary(),
+                      ),
+                    ),
+                  ),
+                ],
                 leading: Container(
                   margin: const EdgeInsets.all(8),
                   decoration: const BoxDecoration(
@@ -629,11 +858,51 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
                   delegate: SliverChildListDelegate([
                     if (_stops.isEmpty)
                       const Text(
-                        'No stops yet — come back soon.',
+                        'No stops yet – come back soon.',
                         style: TextStyle(color: Colors.grey),
                       )
                     else
                       ..._buildTimeline(),
+                    if (_spotlight != null) ...[
+                      const SizedBox(height: 32),
+                      const Text(
+                        'Next Time?',
+                        style:
+                            TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 16),
+                      _buildSpotlightCard(_spotlight!),
+                    ],
+                    const SizedBox(height: 32),
+                    Center(
+                      child: OutlinedButton.icon(
+                        onPressed:
+                            _isRegenerating ? null : () => _regenerateItinerary(),
+                        icon: _isRegenerating
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.refresh),
+                        label: Text(
+                          _isRegenerating ? 'Regenerating' : 'Regenerate',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF1A1A1A),
+                          side: BorderSide(color: Colors.grey[300]!),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
                   ]),
                 ),
               ),
@@ -723,6 +992,38 @@ class _ItineraryDetailScreenState extends State<ItineraryDetailScreen> {
     }
 
     return widgets;
+  }
+
+  Map<String, dynamic>? _findSpotlightVenue() {
+    final spotlight = _spotlight;
+    if (spotlight == null) return null;
+    final placeId = spotlight['place_id']?.toString();
+    final venues = _richItineraryData?['venues'];
+    if (placeId != null && venues is List) {
+      try {
+        final match = venues.firstWhere(
+          (v) => v is Map && v['place_id']?.toString() == placeId,
+          orElse: () => null,
+        );
+        if (match is Map) {
+          return Map<String, dynamic>.from(match.cast<String, dynamic>());
+        }
+      } catch (_) {}
+    }
+    return Map<String, dynamic>.from(spotlight.cast<String, dynamic>());
+  }
+
+  Widget _buildSpotlightCard(Map<String, dynamic> spotlight) {
+    final venue = _findSpotlightVenue();
+    if (venue == null) {
+      return const SizedBox.shrink();
+    }
+
+    return RichVenueCard(
+      venue: venue,
+      stopNumber: _stops.length + 1,
+      badgeLabel: 'RECOMMENDED',
+    );
   }
 
   Widget _buildTimelineItem({

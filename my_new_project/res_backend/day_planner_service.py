@@ -85,25 +85,30 @@ class DayPlannerService:
     
     # STRICT chain blacklist - exclude all recognizable chains
     CHAIN_BLACKLIST = [
-        # Coffee chains
+        # Coffee & Cafe chains
         'starbucks', 'dunkin', 'dunkin donuts', 'tim hortons', 'peet\'s coffee',
-        'caribou coffee', 'costa coffee', 'the coffee bean',
+        'caribou coffee', 'costa coffee', 'the coffee bean', '787 coffee',
+        'joe coffee', 'joe & the juice', 'blank street', 'blue bottle', 
+        'gregory\'s coffee', 'gregorys', 'birch coffee', 'pret a manger',
+        'la colombe', 'stumptown', 'maman', 'bluestone lane',
         
-        # Fast food
+        # Fast food & Fast Casual
         'mcdonald\'s', 'mcdonalds', 'burger king', 'wendy\'s', 'wendys',
         'taco bell', 'kfc', 'popeyes', 'chick-fil-a', 'chipotle',
         'panera bread', 'subway', 'jimmy john\'s', 'jersey mike\'s',
         'five guys', 'shake shack', 'in-n-out', 'whataburger',
+        'sweetgreen', 'dig inn', 'dig', 'chopt', 'just salad', 'cava',
+        'panda express', 'taco bell', 'subway', 'white castle',
         
         # Casual dining chains
         'applebee\'s', 'chili\'s', 'olive garden', 'red lobster',
         'outback steakhouse', 'texas roadhouse', 'buffalo wild wings',
-        'cheesecake factory', 'p.f. chang\'s',
+        'cheesecake factory', 'p.f. chang\'s', 'houston\'s', 'capital grille',
         
         # Pizza chains
         'domino\'s', 'pizza hut', 'papa john\'s', 'little caesars',
         
-        # Existing exclusions (keep these)
+        # Retail & Services
         'grocery', 'market', 'pharmacy', 'gas station', 'convenience',
         'dollar store', 'supermarket', 'warehouse', 'wholesale',
         'bank', 'atm', 'insurance', 'dentist', 'doctor', 'clinic',
@@ -112,7 +117,8 @@ class DayPlannerService:
         'lumber', 'hardware', 'drug store', 'auto', 'car wash', 'mechanic',
         'repair', 'tire', 'credit union', 'real estate', 'lawyer',
         'hospital', 'veterinary', 'vet', 'shipping', 'laundromat',
-        'storage', 'moving', 'furniture store'
+        'storage', 'moving', 'furniture store', 'bank of america', 'chase',
+        'wells fargo', 'citibank', 'td bank', 'capital one'
     ]
     
     # Curated list of NYC neighborhoods/areas with good venue coverage
@@ -229,12 +235,13 @@ class DayPlannerService:
         start_long: Optional[float] = None,
         selected_vibe: Optional[str] = None,
         social_context: str = "couple",
-        radius_meters: int = 3000,
+        radius_meters: int = 1500,  # Reduced from 3000m for tighter localization
         local_time_start: str = "10:00",
         cuisine_preferences: Optional[List[str]] = None,
         cuisine_preference_min: Optional[int] = None,
         cuisine_preference_max: Optional[int] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        exclude_place_ids: Optional[List[str]] = None
     ) -> Dict:
         """
         Generate a full-day itinerary
@@ -261,6 +268,11 @@ class DayPlannerService:
             history_service = UserHistoryService()
             excluded_from_history = history_service.get_excluded_place_ids(user_id, days_back=30)
             print(f"DEBUG: Excluding {len(excluded_from_history)} venues from user history")
+
+        excluded_from_request = [pid for pid in (exclude_place_ids or []) if pid]
+        excluded_place_ids_all = list(
+            {pid for pid in excluded_from_history + excluded_from_request}
+        )
         
         # Parse start time
         try:
@@ -292,8 +304,10 @@ class DayPlannerService:
                     }) + '\n')
             except: pass
             # #endregion
+            # ONLY add offset if we are generating a random NYC location
             start_lat, start_long = self._get_random_nyc_location()
-            print(f"DEBUG: Using random NYC location: ({start_lat:.4f}, {start_long:.4f})")
+            print(f"DEBUG: No start coordinates provided. Using random NYC location: ({start_lat}, {start_long})")
+            
             # #region agent log
             try:
                 with open(log_path, 'a', encoding='utf-8') as f:
@@ -301,7 +315,7 @@ class DayPlannerService:
                         'sessionId': 'debug-session',
                         'runId': 'run1',
                         'hypothesisId': 'A',
-                        'location': 'day_planner_service.py:175',
+                        'location': 'day_planner_service.py:300',
                         'message': 'Random NYC location generated',
                         'data': {
                             'random_lat': start_lat,
@@ -312,14 +326,12 @@ class DayPlannerService:
             except: pass
             # #endregion
         else:
-            # Add random offset to provided coordinates for variety (same as geocode-location)
-            # This ensures different results even when same filter coordinates are used
-            original_lat, original_lon = start_lat, start_long
-            start_lat, start_long = self._add_random_offset(start_lat, start_long)
-            print(f"DEBUG: Added random offset to coordinates: ({original_lat:.4f}, {original_lon:.4f}) → ({start_lat:.4f}, {start_long:.4f})")
+            # If coordinates ARE provided (e.g. from geocoder), do NOT add another random offset.
+            # The geocoder already randomized it within 100-500m.
+            print(f"DEBUG: Using provided coordinates: ({start_lat:.4f}, {start_long:.4f})")
         
-        # Target 7 places total
-        target_stops = 7
+        # TIGHTER ITINERARIES: 3 to 5 places for higher quality and density
+        target_stops = random.randint(3, 5)
         
         # Map "romantic" to "dinner_date" if it's not a valid vibe_slug
         vibe_mapping = {
@@ -328,115 +340,71 @@ class DayPlannerService:
         }
         final_vibe = vibe_mapping.get(selected_vibe, selected_vibe) if selected_vibe else None
         
-        # Retry mechanism: if no venues found and we used a random location, try different locations
-        max_retries = 3 if not original_coords_provided else 0  # Only retry if coordinates were randomly generated
+        # Retry mechanism: broaden search slightly if pool is too small
+        max_retries = 3
         retry_count = 0
         all_venues = []
+        original_radius = radius_meters
         
-        # #region agent log
-        import json
-        import os
-        log_path = r'c:\Users\PURANJAY\OneDrive\Documents\Res_2\.cursor\debug.log'
-        # #endregion
-        
-        while retry_count <= max_retries and not all_venues:
-            if retry_count > 0:
-                # Try a different random location
-                start_lat, start_long = self._get_random_nyc_location()
-                print(f"DEBUG: Retry {retry_count}: Trying different NYC location: ({start_lat:.4f}, {start_long:.4f})")
-                # #region agent log
-                try:
-                    with open(log_path, 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'A',
-                            'location': 'day_planner_service.py:280',
-                            'message': f'Retry {retry_count}: Trying different location',
-                            'data': {
-                                'retry_count': retry_count,
-                                'retry_lat': start_lat,
-                                'retry_lon': start_long
-                            },
-                            'timestamp': int(__import__('time').time() * 1000)
-                        }) + '\n')
-                except: pass
-                # #endregion
-            
-            # Fetch filtered venues (with vibe/cuisine preferences) - limit to max 3
+        while retry_count < max_retries and not all_venues:
+            # Fetch filtered venues (vibe/cuisine specific)
             filtered_venues = self._fetch_venues(
                 start_lat, start_long, radius_meters, final_vibe,
                 cuisine_preferences=cuisine_preferences,
                 cuisine_preference_min=cuisine_preference_min,
                 cuisine_preference_max=cuisine_preference_max,
-                excluded_place_ids=excluded_from_history
+                excluded_place_ids=excluded_place_ids_all
             )
             
-            # Inject hidden gems (1-2 entries) that match filters
+            # Inject hidden gems
             hidden_gems = self._fetch_hidden_gems(
                 start_lat, start_long, radius_meters, final_vibe,
                 cuisine_preferences=cuisine_preferences,
-                excluded_place_ids=excluded_from_history
+                excluded_place_ids=excluded_place_ids_all
             )
-            gems_injected = min(2, len(hidden_gems))
             
-            # Combine filtered venues and hidden gems, deduplicating by place_id
-            combined_venues = filtered_venues + hidden_gems[:gems_injected]
-            seen_place_ids = set()
-            deduplicated_venues = []
-            duplicates_found = 0
-            for venue in combined_venues:
-                place_id = venue.get("place_id")
-                if place_id and place_id not in seen_place_ids:
-                    seen_place_ids.add(place_id)
-                    deduplicated_venues.append(venue)
-                elif place_id:
-                    duplicates_found += 1
-                    print(f"DEBUG: Duplicate venue detected (place_id: {place_id}, name: {venue.get('name', 'Unknown')})")
-            
-            if duplicates_found > 0:
-                print(f"DEBUG: Removed {duplicates_found} duplicate venues from filtered_venues + hidden_gems")
-            
-            # Limit to max 3 filtered venues (including hidden gems)
-            filtered_venues_limited = deduplicated_venues[:3]
-            
-            # Fetch diverse venues for remaining slots (coffee, parks, bookstores, other restaurants)
-            # Exclude place_ids already in filtered_venues_limited
-            exclude_place_ids = [v.get("place_id") for v in filtered_venues_limited if v.get("place_id")]
+            # Fetch diverse venues
             diverse_venues = self._fetch_diverse_venues(
                 start_lat, start_long, radius_meters,
-                exclude_place_ids=exclude_place_ids
+                exclude_place_ids=[v.get("place_id") for v in (filtered_venues + hidden_gems) if v.get("place_id")]
             )
             
-            # Combine: max 3 filtered venues + diverse venues to reach 7 total
-            # Deduplicate again to ensure no duplicates between filtered and diverse venues
-            all_venues = filtered_venues_limited.copy()
-            seen_place_ids = set([v.get("place_id") for v in filtered_venues_limited if v.get("place_id")])
-            diverse_duplicates = 0
-            for venue in diverse_venues:
-                place_id = venue.get("place_id")
-                if place_id and place_id not in seen_place_ids:
-                    seen_place_ids.add(place_id)
-                    all_venues.append(venue)
-                elif place_id:
-                    diverse_duplicates += 1
-                    print(f"DEBUG: Duplicate venue in diverse_venues (place_id: {place_id}, name: {venue.get('name', 'Unknown')})")
+            # Combine all unique candidates into a large pool
+            seen_ids = set()
+            pool = []
+            for v in (filtered_venues + hidden_gems + diverse_venues):
+                pid = v.get("place_id")
+                if pid and pid not in seen_ids:
+                    seen_ids.add(pid)
+                    pool.append(v)
             
-            if diverse_duplicates > 0:
-                print(f"DEBUG: Removed {diverse_duplicates} duplicate venues from diverse_venues")
+            # ENFORCE DIVERSITY & MINIMUM: Broaden if pool is too small
+            # Lowered requirement from 12 to 6 if we have a specific vibe, 10 otherwise.
+            # This prevents blowing up the radius for niche vibes like 'speakeasy'
+            min_candidates = 6 if final_vibe else 10
             
-            print(f"DEBUG: Final all_venues count: {len(all_venues)} (unique place_ids: {len(seen_place_ids)})")
-            
-            if not all_venues:
+            if len(pool) < min_candidates and retry_count < 2:
+                # Broader by 500m instead of doubling. Cap at 2500m.
+                radius_meters = min(2500, radius_meters + 500)
+                if radius_meters == 2500 and retry_count > 0:
+                    # If already capped, just stop and use what we have
+                    all_venues = pool
+                    break
+                
                 retry_count += 1
-                if retry_count <= max_retries:
-                    print(f"DEBUG: No venues found at location ({start_lat:.4f}, {start_long:.4f}), retrying...")
-                    continue
+                print(f"DEBUG: Sparse pool ({len(pool)}). Expanding radius to {radius_meters}m (Retry {retry_count}).")
+                continue
+                
+            all_venues = pool
+            break
         
         if not all_venues:
-            return {"error": "No venues found in the specified area after trying multiple locations"}
+            return {"error": "No venues found in the specified area even after broadening search."}
         
-        # Build itinerary using time slots (7 places total)
+        # DIVERSITY BOOST: Randomize the pool so results vary on every regeneration
+        random.shuffle(all_venues)
+        
+        # Build itinerary (guaranteed 5+ stops due to Pass 2 in _build_itinerary)
         itinerary = self._build_itinerary(all_venues, start_lat, start_long, start_hour, target_stops)
         
         # Ensure at least one hidden gem is included
@@ -519,12 +487,35 @@ class DayPlannerService:
                 )
                 print(f"DEBUG: Saved {len(place_ids)} venues to user history")
         
+        # Count how many hidden gems are in the final itinerary
+        gems_injected = sum(1 for item in itinerary if item.get("is_hidden_gem", False))
+
+        spotlight = None
+        try:
+            from .day_planner_service_v2 import DayPlannerServiceV2
+            spotlight_service = DayPlannerServiceV2()
+            excluded_for_spotlight = [
+                stop.get("place_id") for stop in itinerary if stop.get("place_id")
+            ]
+            excluded_for_spotlight.extend(excluded_place_ids_all)
+            vibe_slugs = [final_vibe] if final_vibe else []
+            spotlight = spotlight_service._find_spotlight_recommendation(
+                lat=start_lat,
+                lng=start_long,
+                radius_m=radius_meters,
+                vibe_slugs=vibe_slugs,
+                excluded_place_ids=excluded_for_spotlight
+            )
+        except Exception as e:
+            print(f"DEBUG: Spotlight lookup failed in V1: {e}")
+        
         return {
             "itinerary_id": itinerary_id,  # Return unique ID for tracking
             "itinerary": itinerary,
             "hidden_gems_injected": gems_injected,
             "total_walk_time_mins": total_walk_time,
-            "narrative": narrative
+            "narrative": narrative,
+            **({"spotlight_recommendation": spotlight} if spotlight else {})
         }
     
     def _fetch_venues(
@@ -769,9 +760,50 @@ class DayPlannerService:
         radius_meters: int,
         exclude_place_ids: Optional[List[str]] = None
     ) -> List[Dict]:
-        """Fetch diverse venue types: coffee, parks, bookstores, other restaurants"""
+        """Fetch diverse venue types: coffee, parks, bookstores, other restaurants.
+        
+        Uses geographic pre-filtering to ensure all venues are within the specified radius.
+        """
         try:
+            from .geohash_cache import get_neighborhood_cluster_rpc
+            
             exclude_set = set(exclude_place_ids) if exclude_place_ids else set()
+            
+            # GEOGRAPHIC PRE-FILTERING: Get all nearby venues first using PostGIS
+            print(f"DEBUG: Fetching diverse venues within {radius_meters}m of ({lat:.4f}, {lon:.4f})")
+            nearby_venues, rpc_success = get_neighborhood_cluster_rpc(lat, lon, radius_meters)
+            
+            if not rpc_success or not nearby_venues:
+                print(f"DEBUG: PostGIS RPC failed or no results. Using bounding box fallback.")
+                
+                # Calculate bounding box for ~2km (conservative)
+                lat_deg = radius_meters / 111000.0
+                lon_deg = radius_meters / (111000.0 * 0.75) # Approx for NYC lat 40.7
+                
+                try:
+                    result = self.supabase.table("venues").select("*")\
+                        .gte("latitude", lat - lat_deg)\
+                        .lte("latitude", lat + lat_deg)\
+                        .gte("longitude", lon - lon_deg)\
+                        .lte("longitude", lon + lon_deg)\
+                        .or_('business_status.is.null,business_status.eq.OPEN')\
+                        .limit(500).execute()
+                    nearby_venues = result.data if result.data else []
+                except Exception as e:
+                    print(f"Error in bounding box venues query: {e}")
+                    nearby_venues = []
+            
+            # Get place_ids of nearby venues
+            nearby_place_ids = set()
+            venue_lookup = {}  # Map place_id -> venue data
+            
+            for venue in nearby_venues:
+                place_id = venue.get("place_id") or str(venue.get("id", ""))
+                if place_id:
+                    nearby_place_ids.add(place_id)
+                    venue_lookup[place_id] = venue
+            
+            print(f"DEBUG: Found {len(nearby_place_ids)} nearby venue candidates")
             
             # Define diverse vibe slugs for different venue types
             diverse_vibes = [
@@ -779,61 +811,55 @@ class DayPlannerService:
                 "brunch_buzzy", "casual_lunch",  # Other restaurants
             ]
             
+            # Get vibes for nearby venues only
             diverse_place_ids = set()
-            
-            # Fetch venues with diverse vibes
-            for vibe in diverse_vibes:
+            if nearby_place_ids:
                 try:
-                    result = self.supabase.table("venue_vibes").select("place_id").eq("vibe_slug", vibe).limit(200).execute()
+                    # Query venue_vibes for nearby venues with diverse vibes
+                    nearby_list = list(nearby_place_ids)[:200]  # Limit for query performance
+                    result = self.supabase.table("venue_vibes").select("place_id, vibe_slug").in_(
+                        "place_id", nearby_list
+                    ).in_("vibe_slug", diverse_vibes).execute()
+                    
                     if result.data:
                         for v in result.data:
                             place_id = v.get("place_id")
                             if place_id and place_id not in exclude_set:
                                 diverse_place_ids.add(place_id)
-                except Exception as e:
-                    print(f"Error fetching diverse vibe {vibe}: {e}")
-                    continue
-            
-            diverse_place_ids = list(diverse_place_ids)[:100]  # Limit to 100 for performance
-            
-            # Fetch venue details
-            venues = []
-            if diverse_place_ids:
-                batch_size = 100
-                for i in range(0, min(len(diverse_place_ids), 100), batch_size):
-                    batch_ids = diverse_place_ids[i:i+batch_size]
-                    try:
-                        result = self.supabase.table("venues").select("*").in_("place_id", batch_ids).execute()
-                        if result.data:
-                            venues.extend(result.data)
-                    except Exception as e:
-                        print(f"Error fetching diverse venues batch: {e}")
-                        continue
-            
-            # Also fetch venues that might be parks, bookstores by name/category
-            if len(venues) < 10:
-                try:
-                    result = self.supabase.table("venues").select("*").limit(500).execute()
-                    if result.data:
-                        keywords = ['park', 'bookstore', 'cafe', 'coffee', 'bakery', 'bistro']
-                        for venue in result.data:
-                            place_id = venue.get("place_id")
-                            if place_id and place_id not in exclude_set:
-                                name_lower = (venue.get("name") or "").lower()
-                                categories = venue.get("categories", [])
-                                categories_str = " ".join([str(c).lower() for c in categories])
                                 
-                                if any(keyword in name_lower or keyword in categories_str for keyword in keywords):
-                                    venues.append(venue)
+                    print(f"DEBUG: Found {len(diverse_place_ids)} diverse venues with matching vibes in nearby area")
                 except Exception as e:
-                    print(f"Error fetching additional diverse venues: {e}")
+                    print(f"Error querying venue_vibes for nearby venues: {e}")
             
-            # Filter by distance and quality
+            # Build venue list from our lookup
+            venues = []
+            for place_id in diverse_place_ids:
+                if place_id in venue_lookup:
+                    venues.append(venue_lookup[place_id])
+            
+            # If we have few diverse venues, also fetch from venues table with keyword matching
+            if len(venues) < 5:
+                print(f"DEBUG: Only {len(venues)} diverse venues found, adding keyword-matched venues")
+                keywords = ['park', 'bookstore', 'cafe', 'coffee', 'bakery', 'bistro']
+                for venue in nearby_venues:
+                    place_id = venue.get("place_id") or str(venue.get("id", ""))
+                    if place_id and place_id not in exclude_set and place_id not in diverse_place_ids:
+                        name_lower = (venue.get("name") or "").lower()
+                        categories = venue.get("categories", [])
+                        categories_str = " ".join([str(c).lower() for c in (categories if categories else [])])
+                        
+                        if any(keyword in name_lower or keyword in categories_str for keyword in keywords):
+                            venues.append(venue)
+            
+            # Filter by distance and quality (double-check even though from PostGIS)
             filtered_venues = []
             for venue in venues:
-                if venue.get("latitude") and venue.get("longitude"):
+                venue_lat = venue.get("latitude") or venue.get("lat")
+                venue_lon = venue.get("longitude") or venue.get("lng")
+                
+                if venue_lat and venue_lon:
                     try:
-                        place_id = venue.get("place_id")
+                        place_id = venue.get("place_id") or str(venue.get("id", ""))
                         if place_id in exclude_set:
                             continue
                         
@@ -846,13 +872,31 @@ class DayPlannerService:
                         if rating < 4.0:
                             continue
                         
-                        dist = haversine_distance(lat, lon, float(venue["latitude"]), float(venue["longitude"]))
+                        dist = haversine_distance(lat, lon, float(venue_lat), float(venue_lon))
                         if dist <= radius_meters:
-                            venue["distance_m"] = dist
-                            filtered_venues.append(venue)
+                            # Normalize venue format
+                            normalized = {
+                                "place_id": place_id,
+                                "name": venue.get("name"),
+                                "address": venue.get("address") or venue.get("formatted_address"),
+                                "latitude": float(venue_lat),
+                                "longitude": float(venue_lon),
+                                "rating": rating,
+                                "distance_m": dist,
+                            }
+                            filtered_venues.append(normalized)
                     except (ValueError, TypeError):
                         continue
             
+            # DIVERSITY INJECTION: Shuffle the candidates before normalizing
+            random.shuffle(filtered_venues)
+            
+            # Additional Jitter: If we have many, pick 15 at random to broaden possibilities
+            if len(filtered_venues) > 15:
+                filtered_venues = random.sample(filtered_venues, 15)
+                
+            print(f"DEBUG: Returning {len(filtered_venues)} diverse venues within {radius_meters}m")
+            return filtered_venues
             # Shuffle for variety, then sort by rating with random factor
             random.shuffle(filtered_venues)
             for v in filtered_venues:
@@ -879,93 +923,110 @@ class DayPlannerService:
         start_hour: int,
         target_stops: int
     ) -> List[Dict]:
-        """Build itinerary by assigning venues to time slots"""
+        """Build itinerary by assigning venues to time slots, strictly enforcing 5+ stops"""
         itinerary = []
         used_place_ids = set()
         current_lat, current_lon = start_lat, start_lon
         current_hour = start_hour
         
-        # Define slot order (always full day regardless of start time)
+        # Define slot sequence
         slot_order = ["coffee", "activity", "brunch", "afternoon", "lunch", "dinner", "nightlife"]
         
-        # Start from appropriate slot based on time
+        # Determine starting slot
         slot_index = 0
-        if start_hour >= 21:
-            slot_index = 6  # Start at nightlife
-        elif start_hour >= 18:
-            slot_index = 5  # Start at dinner
-        elif start_hour >= 14:
-            slot_index = 3  # Start at afternoon
-        elif start_hour >= 12:
-            slot_index = 2  # Start at brunch
-        elif start_hour >= 10:
-            slot_index = 1  # Start at activity
-        else:
-            slot_index = 0  # Start at coffee
+        if start_hour >= 21: slot_index = 6
+        elif start_hour >= 18: slot_index = 5
+        elif start_hour >= 14: slot_index = 3
+        elif start_hour >= 12: slot_index = 2
+        elif start_hour >= 10: slot_index = 1
+        else: slot_index = 0
         
-        slots_used = 0
+        # Tracking names to prevent brand duplication
+        used_names = set()
+        
+        # PASS 1: Attempt to fill primary slots in sequence
         for i in range(len(slot_order)):
-            if slots_used >= target_stops:
+            if len(itinerary) >= target_stops:
                 break
             
             slot_name = slot_order[(slot_index + i) % len(slot_order)]
-            
-            # Find best venue for this slot
-            venue = self._select_venue_for_slot(
-                venues, slot_name, current_lat, current_lon, used_place_ids
-            )
+            venue = self._select_venue_for_slot(venues, slot_name, current_lat, current_lon, used_place_ids, used_names)
             
             if venue:
-                place_id = venue.get("place_id")
-                # Double-check place_id is valid and not already used (defensive check)
-                if not place_id or place_id in used_place_ids:
-                    continue
-                
-                # Calculate distance from current location
-                try:
-                    dist = haversine_distance(
-                        current_lat, current_lon,
-                        float(venue["latitude"]), float(venue["longitude"])
-                    )
-                except (ValueError, TypeError):
-                    continue  # Skip venues with invalid coordinates
-                
-                # Get time for this slot
-                time_str = TimeSlotEngine.get_time_for_slot(slot_name, current_hour)
-                
-                # Calculate vibe match score if vibe was specified
-                vibe_match = self._calculate_vibe_match(venue, slot_name)
-                
-                itinerary.append({
-                    "slot": slot_name,
-                    "time": time_str,
-                    "place_id": place_id,
-                    "name": venue.get("name", "Unknown"),
-                    "vibe_match": vibe_match,
-                    "distance_m": int(dist),
-                    "is_hidden_gem": venue.get("is_hidden_gem", False),
-                    "latitude": float(venue.get("latitude", 0)),
-                    "longitude": float(venue.get("longitude", 0)),
-                    "rating": venue.get("rating") or 0,
-                    "review_count": venue.get("review_count") or 0,
-                    "address": venue.get("address"),
-                    "phone": venue.get("phone"),
-                    "website": venue.get("website"),
-                    "cuisine_match_score": venue.get("cuisine_match_score", 0),
-                    "matched_vibes": venue.get("matched_vibes", [])
-                })
-                
-                used_place_ids.add(place_id)
-                current_lat = venue["latitude"]
-                current_lon = venue["longitude"]
-                slots_used += 1
-                
-                # Advance time (estimate 1.5 hours per stop)
-                current_hour = (current_hour + 1) % 24
-                if current_hour == 0:
-                    current_hour = 24
+                self._add_venue_to_itinerary(itinerary, venue, slot_name, current_hour, used_place_ids, used_names)
+                current_lat, current_lon = venue["latitude"], venue["longitude"]
+                current_hour = (current_hour + 2) % 24  # Advance time by 2 hours
         
+        # PASS 2: IF < 3 STOPS, fill to minimum density
+        if len(itinerary) < 3:
+            print(f"DEBUG: Itinerary only has {len(itinerary)} stops. Performing filler pass to meet min 3.")
+            remaining_venues = [v for v in venues if v.get("place_id") not in used_place_ids]
+            
+            # Deduplicate remaining by name first
+            filtered_remaining = []
+            for v in remaining_venues:
+                name = (v.get("name") or "").lower().strip()
+                if any(name in un or un in name for un in used_names):
+                    continue
+                filtered_remaining.append(v)
+            
+            # Sort by rating and distance
+            filtered_remaining.sort(key=lambda v: (
+                -(v.get('rating', 0) or 0) * 10 + 
+                haversine_distance(current_lat, current_lon, float(v['latitude']), float(v['longitude'])) / 100
+            ))
+            
+            for venue in filtered_remaining:
+                if len(itinerary) >= 3: # Meet minimum of 3
+                    break
+                
+                # Assign to a generic 'extra' slot
+                slot_name = "recommendation"
+                if self._add_venue_to_itinerary(itinerary, venue, slot_name, current_hour, used_place_ids, used_names):
+                    current_lat, current_lon = venue["latitude"], venue["longitude"]
+                    current_hour = (current_hour + 2) % 24
+
         return itinerary
+
+    def _add_venue_to_itinerary(self, itinerary, venue, slot_name, current_hour, used_place_ids, used_names=None):
+        """Helper to format and add a venue to the itinerary"""
+        place_id = venue.get("place_id")
+        name = venue.get("name", "Unknown")
+        if not place_id or place_id in used_place_ids:
+            return False
+            
+        if used_names is not None:
+            used_names.add(name.lower().strip())
+            
+        # Calculate distance from last point
+        last_lat = itinerary[-1]["latitude"] if itinerary else venue["latitude"]
+        last_lon = itinerary[-1]["longitude"] if itinerary else venue["longitude"]
+        
+        try:
+            dist = haversine_distance(last_lat, last_lon, float(venue["latitude"]), float(venue["longitude"]))
+        except:
+            dist = 0
+
+        time_str = f"{current_hour:02d}:00"
+        
+        itinerary.append({
+            "slot": slot_name,
+            "time": time_str,
+            "place_id": place_id,
+            "name": venue.get("name", "Unknown"),
+            "vibe_match": self._calculate_vibe_match(venue, slot_name),
+            "distance_m": int(dist),
+            "is_hidden_gem": venue.get("is_hidden_gem", False),
+            "latitude": float(venue.get("latitude", 0)),
+            "longitude": float(venue.get("longitude", 0)),
+            "rating": venue.get("rating") or 0,
+            "review_count": venue.get("review_count") or 0,
+            "address": venue.get("address"),
+            "cuisine_match_score": venue.get("cuisine_match_score", 0),
+            "matched_vibes": venue.get("matched_vibes", [])
+        })
+        used_place_ids.add(place_id)
+        return True
     
     def _select_venue_for_slot(
         self,
@@ -973,70 +1034,86 @@ class DayPlannerService:
         slot_name: str,
         current_lat: float,
         current_lon: float,
-        used_place_ids: set
+        used_place_ids: set,
+        used_names: set = None
     ) -> Optional[Dict]:
-        """Select best venue for a time slot"""
-        slot_categories = {
-            "coffee": ["coffee", "cafe", "bakery", "breakfast"],
-            "activity": ["park", "museum", "gallery", "bookstore", "shopping"],
-            "brunch": ["restaurant", "brunch", "cafe"],
-            "afternoon": ["park", "bookstore", "museum", "gallery"],
-            "lunch": ["restaurant", "lunch", "food"],
-            "dinner": ["restaurant", "dinner", "fine_dining"],
-            "nightlife": ["bar", "nightclub", "lounge", "speakeasy"],
-        }
-        
-        target_categories = slot_categories.get(slot_name, [])
-        
+        """Select best venue for a time slot with high diversity and fallback flexibility"""
+        if used_names is None:
+            used_names = set()
+            
         candidates = []
         for venue in venues:
             place_id = venue.get("place_id")
-            # Skip venues without place_id or already used
+            name = (venue.get("name") or "").lower().strip()
+            
+            # STRICT DEDUPLICATION: check ID AND Name
             if not place_id or place_id in used_place_ids:
                 continue
+                
+            # Name-based duplicate check (to catch chains not in blacklist)
+            is_duplicate_name = False
+            for prev_name in used_names:
+                if name in prev_name or prev_name in name:
+                    is_duplicate_name = True
+                    break
+            if is_duplicate_name:
+                continue
             
-            # Check if venue matches slot category (simplified - would need category field)
-            # For now, we'll use distance and rating
             try:
                 dist = haversine_distance(
                     current_lat, current_lon,
                     float(venue["latitude"]), float(venue["longitude"])
                 )
             except (ValueError, TypeError):
-                continue  # Skip venues with invalid coordinates
+                continue
             
             rating = venue.get("rating", 0) or 0
             
-            # Score: higher rating, closer distance
-            score = rating * 20 - (dist / 100)  # Rating weighted more
+            # Base score: rating and quality
+            # Add a small random jitter to the score to ensure different results on regeneration
+            score_jitter = random.uniform(-2, 2)
+            score = (rating * 20) - (dist / 100) + score_jitter
             
-            # Boost hidden gems significantly to ensure at least one is included
+            # Boost hidden gems
             if venue.get("is_hidden_gem", False):
-                score += 50  # Significant boost for hidden gems
+                score += 40
+            
+            # Distance penalty for being TOO close (prevents picking the same place twice in a row)
+            if dist < 50:
+                score -= 30
             
             candidates.append((score, venue, dist))
         
         if not candidates:
             return None
         
-        # Sort by score
+        # Sort by score primarily
         candidates.sort(key=lambda x: -x[0])
         
-        # Filter to candidates within reasonable distance (1.5km)
-        nearby_candidates = [(s, v, d) for s, v, d in candidates if d <= 1500]
-        if not nearby_candidates:
-            nearby_candidates = candidates[:5]  # Fall back to top 5 if none nearby
+        # Try finding venues in tiers of distance to maintain localization but ensure results
+        # Tier 1: Very local (1.5km) - The ideal localized experience
+        localized_candidates = [(s, v, d) for s, v, d in candidates if d <= 1500]
         
-        # Randomly select from top candidates for variety
-        # Weight selection towards higher scores but still random
-        if len(nearby_candidates) > 1:
-            # Select from top 3-5 candidates with weighted probability
-            top_n = min(5, len(nearby_candidates))
-            weights = [1.0 / (i + 1) for i in range(top_n)]  # [1.0, 0.5, 0.33, 0.25, 0.2]
-            selected_idx = random.choices(range(top_n), weights=weights, k=1)[0]
-            return nearby_candidates[selected_idx][1]
+        # Tier 2: Neighborhood-wide (3km) - If local options are exhausted
+        if len(localized_candidates) < 3:
+            localized_candidates = [(s, v, d) for s, v, d in candidates if d <= 3000]
+            
+        # Tier 3: City-wide (top candidates) - Ultimate fallback
+        if not localized_candidates:
+            localized_candidates = candidates[:10]
         
-        return nearby_candidates[0][1] if nearby_candidates else None
+        # INCREASED DIVERSITY SELECTION:
+        # Instead of picking from top 5 with heavy weights, use a more balanced distribution
+        if len(localized_candidates) > 1:
+            # Picking from up to 10 candidates for maximum diversity
+            pool_size = min(10, len(localized_candidates))
+            # Use extremely flat weights: 1.0, 0.9, 0.8...
+            # This makes the 3rd or 4th result almost as likely as the 1st
+            weights = [1.0 / (i**0.3 + 1) for i in range(pool_size)] 
+            selected_idx = random.choices(range(pool_size), weights=weights, k=1)[0]
+            return localized_candidates[selected_idx][1]
+        
+        return localized_candidates[0][1] if localized_candidates else None
     
     def _calculate_vibe_match(self, venue: Dict, slot_name: str) -> float:
         """Calculate how well venue matches the slot vibe"""
@@ -1073,6 +1150,80 @@ class DayPlannerService:
             return f"A {vibe_text} day for {context_text}s: {stops[0]} and {stops[1]}"
         else:
             return f"A {vibe_text} day for {context_text}s in NYC"
+
+    def save_itinerary(
+        self,
+        user_id: str,
+        places: List[Dict],
+        filters: Optional[Dict] = None,
+        narrative: Optional[str] = None,
+        total_walk_time_mins: Optional[int] = None
+    ) -> Dict:
+        """Saves a generated itinerary to Supabase for sharing/persistence"""
+        import uuid
+        itinerary_id = str(uuid.uuid4())
+        
+        try:
+            # Prepare data for insertion
+            save_data = {
+                "id": itinerary_id,
+                "user_id": user_id,
+                "places": places,
+                "filters": filters or {},
+                "narrative": narrative or "",
+                "total_walk_time_mins": total_walk_time_mins,
+                "saved_at": datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table("user_saved_itineraries").insert(save_data).execute()
+            
+            if result.data:
+                return {"id": itinerary_id, "success": True}
+            return {"error": "Failed to save itinerary to database"}
+            
+        except Exception as e:
+            print(f"Error saving itinerary: {e}")
+            return {"error": str(e)}
+
+    def get_saved_itinerary(self, itinerary_id: str) -> Dict:
+        """Retrieves and hydrates a saved itinerary by its share ID"""
+        try:
+            result = self.supabase.table("user_saved_itineraries").select("*").eq("id", itinerary_id).execute()
+            
+            if not result.data:
+                return {"error": "Itinerary not found"}
+            
+            saved_data = result.data[0]
+            places = saved_data.get("places", [])
+            
+            # Hydrate venue details using existing logic
+            place_ids = [p.get("place_id") for p in places if p.get("place_id")]
+            detailed_venues = self.get_venue_details(place_ids)
+            
+            # Match detailed data back to the saved itinerary sequence
+            venue_map = {v["place_id"]: v for v in detailed_venues}
+            hydrated_itinerary = []
+            
+            for p in places:
+                pid = p.get("place_id")
+                itinerary_stop = p.copy()
+                if pid in venue_map:
+                    itinerary_stop["venue_details"] = venue_map[pid]
+                hydrated_itinerary.append(itinerary_stop)
+                
+            return {
+                "id": saved_data["id"],
+                "user_id": saved_data["user_id"],
+                "itinerary": hydrated_itinerary,
+                "narrative": saved_data.get("narrative"),
+                "total_walk_time_mins": saved_data.get("total_walk_time_mins"),
+                "filters": saved_data.get("filters"),
+                "saved_at": saved_data.get("saved_at")
+            }
+            
+        except Exception as e:
+            print(f"Error retrieving saved itinerary: {e}")
+            return {"error": str(e)}
     
     def get_venue_details(self, place_ids: List[str]) -> List[Dict]:
         """Fetch full details for venues by place_ids"""

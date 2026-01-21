@@ -769,8 +769,11 @@ class _ItineraryCategorySelectionScreenState
             'filters': {
               'selectedCategories': result['selectedCategories'],
             },
+            'spotlight_recommendation': result['spotlight_recommendation'],
             'itinerary_data': {
               'itinerary': itinerary,
+              'route_stats': result['route_stats'],
+              'spotlight_recommendation': result['spotlight_recommendation'],
             },
           };
 

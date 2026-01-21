@@ -231,8 +231,11 @@ class _PlanditAskAISectionState extends State<PlanditAskAISection> {
         'narrative': result['narrative'],
         'total_walk_time_mins': result['total_walk_time_mins'],
         'filters': activeFilters,
+        'spotlight_recommendation': result['spotlight_recommendation'],
         'itinerary_data': {
           'itinerary': result['itinerary'] ?? [],
+          'route_stats': result['route_stats'],
+          'spotlight_recommendation': result['spotlight_recommendation'],
         },
       };
 
